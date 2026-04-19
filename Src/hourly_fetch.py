@@ -1,7 +1,6 @@
 """
 HOURLY FETCH SCRIPT - Runs every hour via GitHub Actions
 Fetches ONLY the most recent hour and appends to existing CSV
-Handles timezone-aware timestamps correctly
 """
 import openmeteo_requests
 import pandas as pd
@@ -24,7 +23,7 @@ CSV_FILENAME = "karachi_aqi_2025.csv"
 
 print("=" * 60)
 print("HOURLY AQI FETCH - KARACHI")
-print(f"Run at: {datetime.now(timezone.utc)}")
+print(f"Run at (UTC): {datetime.now(timezone.utc)}")
 print("=" * 60)
 
 # ============================================
@@ -32,20 +31,14 @@ print("=" * 60)
 # ============================================
 if not os.path.exists(CSV_FILENAME):
     print(f"❌ Error: {CSV_FILENAME} not found!")
-    print("   Please run the historical fetch first.")
     sys.exit(1)
 
-# Read existing CSV
 existing_df = pd.read_csv(CSV_FILENAME)
-existing_df['timestamp'] = pd.to_datetime(existing_df['timestamp'])
-
-# Make timestamps timezone-aware (UTC)
-if existing_df['timestamp'].dt.tz is None:
-    existing_df['timestamp'] = existing_df['timestamp'].dt.tz_localize('UTC')
-
+# Convert to datetime and force to UTC
+existing_df['timestamp'] = pd.to_datetime(existing_df['timestamp'], utc=True)
 last_timestamp = existing_df['timestamp'].max()
 print(f"\n📁 Existing file found")
-print(f"   Last data timestamp: {last_timestamp}")
+print(f"   Last data timestamp (UTC): {last_timestamp}")
 print(f"   Total rows so far: {len(existing_df)}")
 
 # Get current UTC time
@@ -54,45 +47,32 @@ print(f"   Current UTC time: {now_utc}")
 
 # Calculate the next hour to fetch
 next_hour = last_timestamp + timedelta(hours=1)
-
-print(f"   Next hour to fetch: {next_hour}")
+print(f"   Next hour to fetch (UTC): {next_hour}")
 
 # ============================================
-# STEP 2: Validate timestamps and decide if we need to fetch
+# STEP 2: THE CRITICAL FIX - Check if we need to fetch
 # ============================================
-
-# Case 1: Next hour is in the future (no data to fetch yet)
 if next_hour > now_utc:
-    print(f"\n✅ No new data needed.")
-    print(f"   Next hour ({next_hour}) is in the future.")
-    print(f"   Current time is {now_utc}.")
-    print("   Script will run again at the next hour.")
-    sys.exit(0)
+    print("\n✅ No new data needed.")
+    print(f"   The next hour to fetch ({next_hour}) is in the future.")
+    print(f"   The current time is {now_utc}.")
+    print("   The workflow will exit successfully and try again at the next scheduled hour.")
+    sys.exit(0)  # <-- This clean exit is what we need
 
-# Case 2: Last timestamp is more than 25 hours old (data gap or issue)
-hours_behind = (now_utc - last_timestamp).total_seconds() / 3600
-if hours_behind > 25:
-    print(f"\n⚠️ Warning: Data is {hours_behind:.1f} hours behind.")
-    print("   This may indicate a data gap or API issue.")
-    print("   Fetching last 24 hours to fill gaps...")
-    start_date = (now_utc - timedelta(hours=24)).strftime("%Y-%m-%d")
-    end_date = now_utc.strftime("%Y-%m-%d")
-else:
-    # Normal case: fetch from next hour to now
-    start_date = next_hour.strftime("%Y-%m-%d")
-    end_date = now_utc.strftime("%Y-%m-%d")
+# If we get here, we have data to fetch
+start_date = next_hour.strftime("%Y-%m-%d")
+end_date = now_utc.strftime("%Y-%m-%d")
 
-# Case 3: If start_date is after end_date, something is wrong
+# FINAL SAFETY CHECK: Ensure start_date is not after end_date
 if start_date > end_date:
-    print(f"\n❌ Error: Start date ({start_date}) is after end date ({end_date})")
-    print("   This indicates a timestamp issue.")
-    print("   Please check your CSV data.")
+    print(f"\n❌ FATAL LOGIC ERROR: start_date '{start_date}' > end_date '{end_date}'")
+    print("This should not happen. Exiting to prevent API error.")
     sys.exit(1)
 
 print(f"\n📅 Fetching new data from {start_date} to {end_date}")
 
 # ============================================
-# STEP 3: Fetch new data
+# STEP 3: Fetch new data (only runs if data is needed)
 # ============================================
 try:
     # Fetch Air Quality Data
