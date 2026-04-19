@@ -40,22 +40,27 @@ print(f"\n📁 Existing file found")
 print(f"   Last data timestamp: {last_timestamp}")
 print(f"   Total rows so far: {len(existing_df)}")
 
-# Calculate next hour to fetch
+# Calculate the next hour to fetch
 next_hour = last_timestamp + timedelta(hours=1)
 now = datetime.now()
 
 print(f"   Next hour to fetch: {next_hour}")
 print(f"   Current time: {now}")
 
-# Check if we need to fetch anything
+# IMPORTANT FIX: Check if next_hour is in the future
 if next_hour > now:
     print(f"\n✅ No new data needed. Next hour ({next_hour}) is in the future.")
-    print("   Exiting gracefully.")
+    print("   No data to fetch at this time.")
     sys.exit(0)
 
-# Start from the next hour
+# Only fetch if next_hour is NOT in the future
 start_date = next_hour.strftime("%Y-%m-%d")
 end_date = now.strftime("%Y-%m-%d")
+
+# If start_date is after end_date, exit gracefully
+if start_date > end_date:
+    print(f"\n✅ No new data. Start date ({start_date}) is after end date ({end_date}).")
+    sys.exit(0)
 
 print(f"\n📅 Fetching new data from {start_date} to {end_date}")
 
