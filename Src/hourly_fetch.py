@@ -1,12 +1,13 @@
 """
 HOURLY FETCH SCRIPT - Runs every hour via GitHub Actions
 Fetches ONLY the most recent hour and appends to existing CSV
+Handles timezone-aware timestamps correctly
 """
 import openmeteo_requests
 import pandas as pd
 import requests_cache
 from retry_requests import retry
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import os
 import sys
 
@@ -21,51 +22,77 @@ KARACHI_LON = 67.0011
 
 CSV_FILENAME = "karachi_aqi_2025.csv"
 
-print("=" * 50)
+print("=" * 60)
 print("HOURLY AQI FETCH - KARACHI")
-print(f"Run at: {datetime.now()}")
-print("=" * 50)
+print(f"Run at: {datetime.now(timezone.utc)}")
+print("=" * 60)
 
 # ============================================
 # STEP 1: Find the last timestamp in existing CSV
 # ============================================
 if not os.path.exists(CSV_FILENAME):
     print(f"❌ Error: {CSV_FILENAME} not found!")
+    print("   Please run the historical fetch first.")
     sys.exit(1)
 
+# Read existing CSV
 existing_df = pd.read_csv(CSV_FILENAME)
 existing_df['timestamp'] = pd.to_datetime(existing_df['timestamp'])
+
+# Make timestamps timezone-aware (UTC)
+if existing_df['timestamp'].dt.tz is None:
+    existing_df['timestamp'] = existing_df['timestamp'].dt.tz_localize('UTC')
+
 last_timestamp = existing_df['timestamp'].max()
 print(f"\n📁 Existing file found")
 print(f"   Last data timestamp: {last_timestamp}")
 print(f"   Total rows so far: {len(existing_df)}")
 
+# Get current UTC time
+now_utc = datetime.now(timezone.utc)
+print(f"   Current UTC time: {now_utc}")
+
 # Calculate the next hour to fetch
 next_hour = last_timestamp + timedelta(hours=1)
-now = datetime.now()
 
 print(f"   Next hour to fetch: {next_hour}")
-print(f"   Current time: {now}")
 
-# IMPORTANT FIX: Check if next_hour is in the future
-if next_hour > now:
-    print(f"\n✅ No new data needed. Next hour ({next_hour}) is in the future.")
-    print("   No data to fetch at this time.")
+# ============================================
+# STEP 2: Validate timestamps and decide if we need to fetch
+# ============================================
+
+# Case 1: Next hour is in the future (no data to fetch yet)
+if next_hour > now_utc:
+    print(f"\n✅ No new data needed.")
+    print(f"   Next hour ({next_hour}) is in the future.")
+    print(f"   Current time is {now_utc}.")
+    print("   Script will run again at the next hour.")
     sys.exit(0)
 
-# Only fetch if next_hour is NOT in the future
-start_date = next_hour.strftime("%Y-%m-%d")
-end_date = now.strftime("%Y-%m-%d")
+# Case 2: Last timestamp is more than 25 hours old (data gap or issue)
+hours_behind = (now_utc - last_timestamp).total_seconds() / 3600
+if hours_behind > 25:
+    print(f"\n⚠️ Warning: Data is {hours_behind:.1f} hours behind.")
+    print("   This may indicate a data gap or API issue.")
+    print("   Fetching last 24 hours to fill gaps...")
+    start_date = (now_utc - timedelta(hours=24)).strftime("%Y-%m-%d")
+    end_date = now_utc.strftime("%Y-%m-%d")
+else:
+    # Normal case: fetch from next hour to now
+    start_date = next_hour.strftime("%Y-%m-%d")
+    end_date = now_utc.strftime("%Y-%m-%d")
 
-# If start_date is after end_date, exit gracefully
+# Case 3: If start_date is after end_date, something is wrong
 if start_date > end_date:
-    print(f"\n✅ No new data. Start date ({start_date}) is after end date ({end_date}).")
-    sys.exit(0)
+    print(f"\n❌ Error: Start date ({start_date}) is after end date ({end_date})")
+    print("   This indicates a timestamp issue.")
+    print("   Please check your CSV data.")
+    sys.exit(1)
 
 print(f"\n📅 Fetching new data from {start_date} to {end_date}")
 
 # ============================================
-# STEP 2: Fetch new data
+# STEP 3: Fetch new data
 # ============================================
 try:
     # Fetch Air Quality Data
@@ -89,6 +116,7 @@ try:
         print("   ⚠️ No new air quality data available")
         sys.exit(0)
     
+    # Create timestamps (API returns UTC)
     aq_timestamps = pd.date_range(
         start=pd.to_datetime(aq_hourly.Time(), unit="s", utc=True),
         periods=aq_length,
@@ -150,10 +178,18 @@ try:
     new_data = pd.merge(aq_df, weather_df, on="timestamp", how="inner")
     new_data.insert(0, "city", "Karachi")
     
+    # Filter out any timestamps that are already in existing data
+    existing_timestamps = set(existing_df['timestamp'])
+    new_data = new_data[~new_data['timestamp'].isin(existing_timestamps)]
+    
+    if len(new_data) == 0:
+        print("   ⚠️ No new data after filtering duplicates")
+        sys.exit(0)
+    
     print(f"   ✅ Fetched {len(new_data)} new rows")
     
     # ============================================
-    # STEP 3: Append to existing CSV
+    # STEP 4: Append to existing CSV
     # ============================================
     updated_df = pd.concat([existing_df, new_data], ignore_index=True)
     updated_df = updated_df.drop_duplicates(subset=['timestamp'], keep='last')
@@ -170,6 +206,6 @@ except Exception as e:
     traceback.print_exc()
     sys.exit(1)
 
-print("\n" + "=" * 50)
+print("\n" + "=" * 60)
 print("✅ HOURLY FETCH COMPLETE!")
-print("=" * 50)
+print("=" * 60)
