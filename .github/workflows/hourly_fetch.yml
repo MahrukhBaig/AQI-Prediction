@@ -1,0 +1,37 @@
+name: Hourly AQI Data Fetch
+
+on:
+  schedule:
+    # Runs at minute 0 of every hour (12:00, 1:00, 2:00, etc.)
+    - cron: '0 * * * *'
+  
+  # Allows you to manually run from GitHub website
+  workflow_dispatch:
+
+jobs:
+  fetch-and-append:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      
+      - name: Install dependencies
+        run: |
+          pip install openmeteo-requests pandas requests_cache retry-requests openpyxl
+      
+      - name: Run hourly fetch script
+        run: python Src/hourly_fetch.py
+      
+      - name: Commit and push updated CSV
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add karachi_aqi_2025.csv
+          git diff --quiet && git diff --staged --quiet || git commit -m "Hourly AQI data update [skip ci]"
+          git push
