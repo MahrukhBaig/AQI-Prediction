@@ -1,12 +1,11 @@
 """
-HOURLY FETCH SCRIPT - Runs every hour via GitHub Actions
-Fetches ONLY the most recent hour and appends to existing CSV
+HOURLY FETCH SCRIPT - Simplified & Foolproof
 """
 import openmeteo_requests
 import pandas as pd
 import requests_cache
 from retry_requests import retry
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 import os
 import sys
 
@@ -23,59 +22,63 @@ CSV_FILENAME = "karachi_aqi_2025.csv"
 
 print("=" * 60)
 print("HOURLY AQI FETCH - KARACHI")
-print(f"Run at (UTC): {datetime.now(timezone.utc)}")
 print("=" * 60)
 
 # ============================================
-# STEP 1: Find the last timestamp in existing CSV
+# STEP 1: Read CSV and get last timestamp
 # ============================================
 if not os.path.exists(CSV_FILENAME):
     print(f"❌ Error: {CSV_FILENAME} not found!")
     sys.exit(1)
 
 existing_df = pd.read_csv(CSV_FILENAME)
-# Convert to datetime and force to UTC
-existing_df['timestamp'] = pd.to_datetime(existing_df['timestamp'], utc=True)
+existing_df['timestamp'] = pd.to_datetime(existing_df['timestamp'])
+
+# Convert to naive datetime (remove timezone if any)
+if existing_df['timestamp'].dt.tz is not None:
+    existing_df['timestamp'] = existing_df['timestamp'].dt.tz_localize(None)
+
 last_timestamp = existing_df['timestamp'].max()
-print(f"\n📁 Existing file found")
-print(f"   Last data timestamp (UTC): {last_timestamp}")
-print(f"   Total rows so far: {len(existing_df)}")
+print(f"\n📁 Last data timestamp: {last_timestamp}")
+print(f"   Total rows: {len(existing_df)}")
 
-# Get current UTC time
-now_utc = datetime.now(timezone.utc)
-print(f"   Current UTC time: {now_utc}")
+# ============================================
+# STEP 2: Get current time (naive, no timezone)
+# ============================================
+now_naive = datetime.now()
+print(f"   Current time: {now_naive}")
 
-# Calculate the next hour to fetch
+# Calculate next hour to fetch
 next_hour = last_timestamp + timedelta(hours=1)
-print(f"   Next hour to fetch (UTC): {next_hour}")
+print(f"   Next hour to fetch: {next_hour}")
 
 # ============================================
-# STEP 2: THE CRITICAL FIX - Check if we need to fetch
+# STEP 3: CRITICAL CHECK - Is next_hour in the future?
 # ============================================
-if next_hour > now_utc:
-    print("\n✅ No new data needed.")
-    print(f"   The next hour to fetch ({next_hour}) is in the future.")
-    print(f"   The current time is {now_utc}.")
-    print("   The workflow will exit successfully and try again at the next scheduled hour.")
-    sys.exit(0)  # <-- This clean exit is what we need
+if next_hour > now_naive:
+    print(f"\n✅ No new data needed.")
+    print(f"   Next hour ({next_hour}) is in the future.")
+    print(f"   Current time ({now_naive}) is earlier.")
+    print("   Exiting successfully.")
+    sys.exit(0)
 
-# If we get here, we have data to fetch
+# ============================================
+# STEP 4: If we get here, we need to fetch data
+# ============================================
 start_date = next_hour.strftime("%Y-%m-%d")
-end_date = now_utc.strftime("%Y-%m-%d")
+end_date = now_naive.strftime("%Y-%m-%d")
 
-# FINAL SAFETY CHECK: Ensure start_date is not after end_date
+print(f"\n📅 Fetching from {start_date} to {end_date}")
+
+# Safety check
 if start_date > end_date:
-    print(f"\n❌ FATAL LOGIC ERROR: start_date '{start_date}' > end_date '{end_date}'")
-    print("This should not happen. Exiting to prevent API error.")
+    print(f"❌ Error: start_date > end_date")
     sys.exit(1)
 
-print(f"\n📅 Fetching new data from {start_date} to {end_date}")
-
 # ============================================
-# STEP 3: Fetch new data (only runs if data is needed)
+# STEP 5: Fetch Air Quality Data
 # ============================================
 try:
-    # Fetch Air Quality Data
     air_quality_url = "https://air-quality-api.open-meteo.com/v1/air-quality"
     aq_params = {
         "latitude": KARACHI_LAT,
@@ -86,19 +89,18 @@ try:
                    "ozone", "sulphur_dioxide", "us_aqi", "european_aqi"]
     }
 
-    print("   → Fetching air quality data...")
+    print("   → Fetching air quality...")
     aq_response = openmeteo.weather_api(air_quality_url, params=aq_params)[0]
     aq_hourly = aq_response.Hourly()
     
     aq_length = len(aq_hourly.Variables(0).ValuesAsNumpy())
     
     if aq_length == 0:
-        print("   ⚠️ No new air quality data available")
+        print("   No new data")
         sys.exit(0)
     
-    # Create timestamps (API returns UTC)
     aq_timestamps = pd.date_range(
-        start=pd.to_datetime(aq_hourly.Time(), unit="s", utc=True),
+        start=pd.to_datetime(aq_hourly.Time(), unit="s"),
         periods=aq_length,
         freq=pd.Timedelta(seconds=aq_hourly.Interval()),
         inclusive="left"
@@ -116,7 +118,9 @@ try:
         "european_aqi": aq_hourly.Variables(7).ValuesAsNumpy()
     })
     
-    # Fetch Weather Data
+    # ============================================
+    # STEP 6: Fetch Weather Data
+    # ============================================
     weather_url = "https://archive-api.open-meteo.com/v1/archive"
     weather_params = {
         "latitude": KARACHI_LAT,
@@ -127,18 +131,14 @@ try:
                    "pressure_msl", "precipitation", "cloudcover"]
     }
     
-    print("   → Fetching weather data...")
+    print("   → Fetching weather...")
     weather_response = openmeteo.weather_api(weather_url, params=weather_params)[0]
     weather_hourly = weather_response.Hourly()
     
     weather_length = len(weather_hourly.Variables(0).ValuesAsNumpy())
     
-    if weather_length == 0:
-        print("   ⚠️ No new weather data available")
-        sys.exit(0)
-    
     weather_timestamps = pd.date_range(
-        start=pd.to_datetime(weather_hourly.Time(), unit="s", utc=True),
+        start=pd.to_datetime(weather_hourly.Time(), unit="s"),
         periods=weather_length,
         freq=pd.Timedelta(seconds=weather_hourly.Interval()),
         inclusive="left"
@@ -154,38 +154,29 @@ try:
         "cloudcover": weather_hourly.Variables(5).ValuesAsNumpy()
     })
     
-    # Merge new data
+    # ============================================
+    # STEP 7: Merge and Save
+    # ============================================
     new_data = pd.merge(aq_df, weather_df, on="timestamp", how="inner")
     new_data.insert(0, "city", "Karachi")
     
-    # Filter out any timestamps that are already in existing data
-    existing_timestamps = set(existing_df['timestamp'])
-    new_data = new_data[~new_data['timestamp'].isin(existing_timestamps)]
+    # Remove duplicates
+    new_data = new_data[~new_data['timestamp'].isin(existing_df['timestamp'])]
     
     if len(new_data) == 0:
-        print("   ⚠️ No new data after filtering duplicates")
+        print("   No new data after deduplication")
         sys.exit(0)
     
-    print(f"   ✅ Fetched {len(new_data)} new rows")
-    
-    # ============================================
-    # STEP 4: Append to existing CSV
-    # ============================================
     updated_df = pd.concat([existing_df, new_data], ignore_index=True)
-    updated_df = updated_df.drop_duplicates(subset=['timestamp'], keep='last')
     updated_df = updated_df.sort_values('timestamp')
     updated_df.to_csv(CSV_FILENAME, index=False)
     
-    print(f"\n✅ File updated!")
-    print(f"   New total rows: {len(updated_df)}")
-    print(f"   Date range now: {updated_df['timestamp'].min()} to {updated_df['timestamp'].max()}")
+    print(f"\n✅ SUCCESS! Added {len(new_data)} new rows")
+    print(f"   Total rows now: {len(updated_df)}")
+    print(f"   Date range: {updated_df['timestamp'].min()} to {updated_df['timestamp'].max()}")
     
 except Exception as e:
     print(f"❌ Error: {e}")
-    import traceback
-    traceback.print_exc()
     sys.exit(1)
 
-print("\n" + "=" * 60)
-print("✅ HOURLY FETCH COMPLETE!")
-print("=" * 60)
+print("\n✅ HOURLY FETCH COMPLETE!")
