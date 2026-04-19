@@ -8,6 +8,7 @@ import requests_cache
 from retry_requests import retry
 from datetime import datetime, timedelta
 import os
+import sys
 
 # Setup API client
 cache_session = requests_cache.CachedSession('.cache', expire_after=3600)
@@ -28,121 +29,141 @@ print("=" * 50)
 # ============================================
 # STEP 1: Find the last timestamp in existing CSV
 # ============================================
-if os.path.exists(CSV_FILENAME):
-    existing_df = pd.read_csv(CSV_FILENAME)
-    existing_df['timestamp'] = pd.to_datetime(existing_df['timestamp'])
-    last_timestamp = existing_df['timestamp'].max()
-    print(f"\n📁 Existing file found")
-    print(f"   Last data timestamp: {last_timestamp}")
-    print(f"   Total rows so far: {len(existing_df)}")
-    
-    # Start from the hour AFTER the last timestamp
-    start_date = (last_timestamp + timedelta(hours=1)).strftime("%Y-%m-%d")
-    print(f"   Fetching from: {start_date}")
-else:
-    print(f"\n⚠️ No existing file found. Please run the historical fetch first.")
-    exit(1)
+if not os.path.exists(CSV_FILENAME):
+    print(f"❌ Error: {CSV_FILENAME} not found!")
+    sys.exit(1)
 
-# ============================================
-# STEP 2: Fetch ONLY new data (last hour)
-# ============================================
-end_date = datetime.now().strftime("%Y-%m-%d")
+existing_df = pd.read_csv(CSV_FILENAME)
+existing_df['timestamp'] = pd.to_datetime(existing_df['timestamp'])
+last_timestamp = existing_df['timestamp'].max()
+print(f"\n📁 Existing file found")
+print(f"   Last data timestamp: {last_timestamp}")
+print(f"   Total rows so far: {len(existing_df)}")
+
+# Calculate next hour to fetch
+next_hour = last_timestamp + timedelta(hours=1)
+now = datetime.now()
+
+print(f"   Next hour to fetch: {next_hour}")
+print(f"   Current time: {now}")
+
+# Check if we need to fetch anything
+if next_hour > now:
+    print(f"\n✅ No new data needed. Next hour ({next_hour}) is in the future.")
+    print("   Exiting gracefully.")
+    sys.exit(0)
+
+# Start from the next hour
+start_date = next_hour.strftime("%Y-%m-%d")
+end_date = now.strftime("%Y-%m-%d")
 
 print(f"\n📅 Fetching new data from {start_date} to {end_date}")
 
-# Fetch Air Quality Data
-air_quality_url = "https://air-quality-api.open-meteo.com/v1/air-quality"
-aq_params = {
-    "latitude": KARACHI_LAT,
-    "longitude": KARACHI_LON,
-    "start_date": start_date,
-    "end_date": end_date,
-    "hourly": ["pm10", "pm2_5", "carbon_monoxide", "nitrogen_dioxide",
-               "ozone", "sulphur_dioxide", "us_aqi", "european_aqi"]
-}
-
-print("   → Fetching air quality data...")
-aq_response = openmeteo.weather_api(air_quality_url, params=aq_params)[0]
-aq_hourly = aq_response.Hourly()
-
-aq_length = len(aq_hourly.Variables(0).ValuesAsNumpy())
-aq_timestamps = pd.date_range(
-    start=pd.to_datetime(aq_hourly.Time(), unit="s", utc=True),
-    periods=aq_length,
-    freq=pd.Timedelta(seconds=aq_hourly.Interval()),
-    inclusive="left"
-)
-
-aq_df = pd.DataFrame({
-    "timestamp": aq_timestamps,
-    "pm10": aq_hourly.Variables(0).ValuesAsNumpy(),
-    "pm2_5": aq_hourly.Variables(1).ValuesAsNumpy(),
-    "carbon_monoxide": aq_hourly.Variables(2).ValuesAsNumpy(),
-    "nitrogen_dioxide": aq_hourly.Variables(3).ValuesAsNumpy(),
-    "ozone": aq_hourly.Variables(4).ValuesAsNumpy(),
-    "sulphur_dioxide": aq_hourly.Variables(5).ValuesAsNumpy(),
-    "us_aqi": aq_hourly.Variables(6).ValuesAsNumpy(),
-    "european_aqi": aq_hourly.Variables(7).ValuesAsNumpy()
-})
-
-# Fetch Weather Data
-weather_url = "https://archive-api.open-meteo.com/v1/archive"
-weather_params = {
-    "latitude": KARACHI_LAT,
-    "longitude": KARACHI_LON,
-    "start_date": start_date,
-    "end_date": end_date,
-    "hourly": ["temperature_2m", "relative_humidity_2m", "wind_speed_10m",
-               "pressure_msl", "precipitation", "cloudcover"]
-}
-
-print("   → Fetching weather data...")
-weather_response = openmeteo.weather_api(weather_url, params=weather_params)[0]
-weather_hourly = weather_response.Hourly()
-
-weather_length = len(weather_hourly.Variables(0).ValuesAsNumpy())
-weather_timestamps = pd.date_range(
-    start=pd.to_datetime(weather_hourly.Time(), unit="s", utc=True),
-    periods=weather_length,
-    freq=pd.Timedelta(seconds=weather_hourly.Interval()),
-    inclusive="left"
-)
-
-weather_df = pd.DataFrame({
-    "timestamp": weather_timestamps,
-    "temperature": weather_hourly.Variables(0).ValuesAsNumpy(),
-    "humidity": weather_hourly.Variables(1).ValuesAsNumpy(),
-    "wind_speed": weather_hourly.Variables(2).ValuesAsNumpy(),
-    "pressure": weather_hourly.Variables(3).ValuesAsNumpy(),
-    "precipitation": weather_hourly.Variables(4).ValuesAsNumpy(),
-    "cloudcover": weather_hourly.Variables(5).ValuesAsNumpy()
-})
-
-# Merge new data
-new_data = pd.merge(aq_df, weather_df, on="timestamp", how="inner")
-new_data.insert(0, "city", "Karachi")
-
-print(f"   ✅ Fetched {len(new_data)} new rows")
-
 # ============================================
-# STEP 3: Append to existing CSV
+# STEP 2: Fetch new data
 # ============================================
-if len(new_data) > 0:
-    # Combine existing + new
-    updated_df = pd.concat([existing_df, new_data], ignore_index=True)
-    # Remove duplicates (just in case)
-    updated_df = updated_df.drop_duplicates(subset=['timestamp'], keep='last')
-    # Sort by timestamp
-    updated_df = updated_df.sort_values('timestamp')
+try:
+    # Fetch Air Quality Data
+    air_quality_url = "https://air-quality-api.open-meteo.com/v1/air-quality"
+    aq_params = {
+        "latitude": KARACHI_LAT,
+        "longitude": KARACHI_LON,
+        "start_date": start_date,
+        "end_date": end_date,
+        "hourly": ["pm10", "pm2_5", "carbon_monoxide", "nitrogen_dioxide",
+                   "ozone", "sulphur_dioxide", "us_aqi", "european_aqi"]
+    }
+
+    print("   → Fetching air quality data...")
+    aq_response = openmeteo.weather_api(air_quality_url, params=aq_params)[0]
+    aq_hourly = aq_response.Hourly()
     
-    # Save back to CSV
+    aq_length = len(aq_hourly.Variables(0).ValuesAsNumpy())
+    
+    if aq_length == 0:
+        print("   ⚠️ No new air quality data available")
+        sys.exit(0)
+    
+    aq_timestamps = pd.date_range(
+        start=pd.to_datetime(aq_hourly.Time(), unit="s", utc=True),
+        periods=aq_length,
+        freq=pd.Timedelta(seconds=aq_hourly.Interval()),
+        inclusive="left"
+    )
+    
+    aq_df = pd.DataFrame({
+        "timestamp": aq_timestamps,
+        "pm10": aq_hourly.Variables(0).ValuesAsNumpy(),
+        "pm2_5": aq_hourly.Variables(1).ValuesAsNumpy(),
+        "carbon_monoxide": aq_hourly.Variables(2).ValuesAsNumpy(),
+        "nitrogen_dioxide": aq_hourly.Variables(3).ValuesAsNumpy(),
+        "ozone": aq_hourly.Variables(4).ValuesAsNumpy(),
+        "sulphur_dioxide": aq_hourly.Variables(5).ValuesAsNumpy(),
+        "us_aqi": aq_hourly.Variables(6).ValuesAsNumpy(),
+        "european_aqi": aq_hourly.Variables(7).ValuesAsNumpy()
+    })
+    
+    # Fetch Weather Data
+    weather_url = "https://archive-api.open-meteo.com/v1/archive"
+    weather_params = {
+        "latitude": KARACHI_LAT,
+        "longitude": KARACHI_LON,
+        "start_date": start_date,
+        "end_date": end_date,
+        "hourly": ["temperature_2m", "relative_humidity_2m", "wind_speed_10m",
+                   "pressure_msl", "precipitation", "cloudcover"]
+    }
+    
+    print("   → Fetching weather data...")
+    weather_response = openmeteo.weather_api(weather_url, params=weather_params)[0]
+    weather_hourly = weather_response.Hourly()
+    
+    weather_length = len(weather_hourly.Variables(0).ValuesAsNumpy())
+    
+    if weather_length == 0:
+        print("   ⚠️ No new weather data available")
+        sys.exit(0)
+    
+    weather_timestamps = pd.date_range(
+        start=pd.to_datetime(weather_hourly.Time(), unit="s", utc=True),
+        periods=weather_length,
+        freq=pd.Timedelta(seconds=weather_hourly.Interval()),
+        inclusive="left"
+    )
+    
+    weather_df = pd.DataFrame({
+        "timestamp": weather_timestamps,
+        "temperature": weather_hourly.Variables(0).ValuesAsNumpy(),
+        "humidity": weather_hourly.Variables(1).ValuesAsNumpy(),
+        "wind_speed": weather_hourly.Variables(2).ValuesAsNumpy(),
+        "pressure": weather_hourly.Variables(3).ValuesAsNumpy(),
+        "precipitation": weather_hourly.Variables(4).ValuesAsNumpy(),
+        "cloudcover": weather_hourly.Variables(5).ValuesAsNumpy()
+    })
+    
+    # Merge new data
+    new_data = pd.merge(aq_df, weather_df, on="timestamp", how="inner")
+    new_data.insert(0, "city", "Karachi")
+    
+    print(f"   ✅ Fetched {len(new_data)} new rows")
+    
+    # ============================================
+    # STEP 3: Append to existing CSV
+    # ============================================
+    updated_df = pd.concat([existing_df, new_data], ignore_index=True)
+    updated_df = updated_df.drop_duplicates(subset=['timestamp'], keep='last')
+    updated_df = updated_df.sort_values('timestamp')
     updated_df.to_csv(CSV_FILENAME, index=False)
     
     print(f"\n✅ File updated!")
     print(f"   New total rows: {len(updated_df)}")
     print(f"   Date range now: {updated_df['timestamp'].min()} to {updated_df['timestamp'].max()}")
-else:
-    print("\n✅ No new data to append")
+    
+except Exception as e:
+    print(f"❌ Error: {e}")
+    import traceback
+    traceback.print_exc()
+    sys.exit(1)
 
 print("\n" + "=" * 50)
 print("✅ HOURLY FETCH COMPLETE!")
