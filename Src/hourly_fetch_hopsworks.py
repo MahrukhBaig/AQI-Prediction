@@ -79,10 +79,46 @@ except Exception as e:
 # ============================================
 # LAST TIMESTAMP
 # ============================================
-df_existing = fg.read()
-df_existing['timestamp'] = pd.to_datetime(df_existing['timestamp'])
-last_ts = df_existing['timestamp'].max()
+# ============================================
+# LAST TIMESTAMP (Robust version)
+# ============================================
+import time
 
+print("\n2. Reading last timestamp from Hopsworks...")
+
+max_retries = 3
+for attempt in range(max_retries):
+    try:
+        if attempt > 0:
+            print(f"   Retry attempt {attempt + 1}/{max_retries}...")
+        
+        # Try to get only latest timestamp (faster)
+        try:
+            query = fg.select(["timestamp"]).sort("timestamp", ascending=False).limit(1)
+            latest_row = query.read()
+            last_ts = pd.to_datetime(latest_row['timestamp'].iloc[0])
+            print(f"   📅 Last timestamp: {last_ts}")
+            break
+        except:
+            # Fallback: read all data
+            df_existing = fg.read()
+            df_existing['timestamp'] = pd.to_datetime(df_existing['timestamp'])
+            last_ts = df_existing['timestamp'].max()
+            print(f"   📅 Last timestamp: {last_ts}")
+            break
+            
+    except Exception as e:
+        print(f"   ⚠️ Attempt {attempt + 1} failed: {e}")
+        if attempt < max_retries - 1:
+            wait_time = 5 * (attempt + 1)
+            print(f"   Waiting {wait_time} seconds...")
+            time.sleep(wait_time)
+        else:
+            print("   ❌ Max retries reached. Exiting.")
+            sys.exit(1)
+
+print(f"   ⏰ Next hour: {last_ts + timedelta(hours=1)}")
+print(f"   🕐 Current: {datetime.now(timezone.utc)}")
 print(f"   📅 Last timestamp: {last_ts}")
 
 # ============================================
