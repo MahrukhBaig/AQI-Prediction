@@ -2,14 +2,11 @@ name: Hourly AQI Data Fetch
 
 on:
   schedule:
-    # Runs at minute 0 of every hour (12:00, 1:00, 2:00, etc.)
     - cron: '0 * * * *'
-  
-  # Allows you to manually run from GitHub website
   workflow_dispatch:
 
 jobs:
-  fetch-and-append:
+  fetch-and-upload:
     runs-on: ubuntu-latest
     
     steps:
@@ -23,15 +20,9 @@ jobs:
       
       - name: Install dependencies
         run: |
-          pip install openmeteo-requests pandas requests_cache retry-requests openpyxl
+          pip install openmeteo-requests pandas requests_cache retry-requests hopsworks python-dotenv
       
-      - name: Run hourly fetch script
-        run: python Src/hourly_fetch.py
-      
-      - name: Commit and push updated CSV
-        run: |
-          git config --local user.email "action@github.com"
-          git config --local user.name "GitHub Action"
-          git add karachi_aqi_2025.csv
-          git diff --quiet && git diff --staged --quiet || git commit -m "Hourly AQI data update [skip ci]"
-          git push
+      - name: Run hourly fetch to Hopsworks
+        env:
+          HOPSWORKS_API_KEY: ${{ secrets.HOPSWORKS_API_KEY }}
+        run: python Src/hourly_fetch_hopsworks.py
