@@ -1,10 +1,8 @@
 """
 HOURLY FETCH SCRIPT - Direct to Hopsworks
+Runs every hour via GitHub Actions
+Fetches only NEW data and inserts directly into Hopsworks Feature Store
 """
-
-# ============================================
-# IMPORTS
-# ============================================
 import openmeteo_requests
 import pandas as pd
 import requests_cache
@@ -16,9 +14,7 @@ import sys
 from pathlib import Path
 from dotenv import load_dotenv
 
-# ============================================
-# ENV SETUP
-# ============================================
+# Load API key from .env
 ROOT_DIR = Path(__file__).resolve().parent.parent
 env_path = ROOT_DIR / ".env"
 
@@ -27,7 +23,6 @@ if env_path.exists():
 
 HOPSWORKS_API_KEY = os.getenv("HOPSWORKS_API_KEY")
 
-# Remove any hidden spaces/newlines
 if HOPSWORKS_API_KEY:
     HOPSWORKS_API_KEY = HOPSWORKS_API_KEY.strip()
 
@@ -35,9 +30,7 @@ if not HOPSWORKS_API_KEY:
     print("❌ API key missing")
     sys.exit(1)
 
-# ============================================
-# SETUP OPEN-METEO
-# ============================================
+# Setup Open-Meteo client
 cache_session = requests_cache.CachedSession('.cache', expire_after=3600)
 retry_session = retry(cache_session, retries=5, backoff_factor=0.2)
 openmeteo = openmeteo_requests.Client(session=retry_session)
@@ -51,7 +44,7 @@ print(f"Run at: {datetime.now(timezone.utc)}")
 print("=" * 60)
 
 # ============================================
-# CONNECT TO HOPSWORKS
+# STEP 1: Connect to Hopsworks
 # ============================================
 print("\n1. Connecting to Hopsworks...")
 
@@ -67,7 +60,7 @@ except Exception as e:
     sys.exit(1)
 
 # ============================================
-# FEATURE GROUP
+# STEP 2: Get Feature Group
 # ============================================
 try:
     fg = fs.get_feature_group("karachi_aqi_features", version=1)
@@ -77,16 +70,15 @@ except Exception as e:
     sys.exit(1)
 
 # ============================================
-# LAST TIMESTAMP
-# ============================================
-# ============================================
-# LAST TIMESTAMP (Robust version)
+# STEP 3: Get last timestamp (with retry)
 # ============================================
 import time
 
 print("\n2. Reading last timestamp from Hopsworks...")
 
 max_retries = 3
+last_ts = None
+
 for attempt in range(max_retries):
     try:
         if attempt > 0:
@@ -99,8 +91,9 @@ for attempt in range(max_retries):
             last_ts = pd.to_datetime(latest_row['timestamp'].iloc[0])
             print(f"   📅 Last timestamp: {last_ts}")
             break
-        except:
+        except Exception as e:
             # Fallback: read all data
+            print(f"   Reading full dataset (this may take a moment)...")
             df_existing = fg.read()
             df_existing['timestamp'] = pd.to_datetime(df_existing['timestamp'])
             last_ts = df_existing['timestamp'].max()
@@ -117,12 +110,8 @@ for attempt in range(max_retries):
             print("   ❌ Max retries reached. Exiting.")
             sys.exit(1)
 
-print(f"   ⏰ Next hour: {last_ts + timedelta(hours=1)}")
-print(f"   🕐 Current: {datetime.now(timezone.utc)}")
-print(f"   📅 Last timestamp: {last_ts}")
-
 # ============================================
-# CHECK NEW DATA
+# STEP 4: Check if new data is needed
 # ============================================
 next_hour = last_ts + timedelta(hours=1)
 now_utc = datetime.now(timezone.utc)
@@ -135,14 +124,14 @@ if next_hour > now_utc:
     sys.exit(0)
 
 # ============================================
-# FETCH DATA
+# STEP 5: Fetch new data
 # ============================================
 start_date = next_hour.strftime("%Y-%m-%d")
 end_date = now_utc.strftime("%Y-%m-%d")
 
 print(f"\n📅 Fetching {start_date} → {end_date}")
 
-# AQ DATA
+# Fetch Air Quality
 aq_response = openmeteo.weather_api(
     "https://air-quality-api.open-meteo.com/v1/air-quality",
     params={
@@ -151,10 +140,8 @@ aq_response = openmeteo.weather_api(
         "start_date": start_date,
         "end_date": end_date,
         "hourly": [
-            "pm10", "pm2_5",
-            "carbon_monoxide", "nitrogen_dioxide",
-            "ozone", "sulphur_dioxide",
-            "us_aqi", "european_aqi"
+            "pm10", "pm2_5", "carbon_monoxide", "nitrogen_dioxide",
+            "ozone", "sulphur_dioxide", "us_aqi", "european_aqi"
         ]
     }
 )[0]
@@ -185,7 +172,7 @@ aq_df = pd.DataFrame({
     "european_aqi": aq_hourly.Variables(7).ValuesAsNumpy(),
 })
 
-# WEATHER DATA
+# Fetch Weather
 weather_response = openmeteo.weather_api(
     "https://archive-api.open-meteo.com/v1/archive",
     params={
@@ -194,12 +181,8 @@ weather_response = openmeteo.weather_api(
         "start_date": start_date,
         "end_date": end_date,
         "hourly": [
-            "temperature_2m",
-            "relative_humidity_2m",
-            "wind_speed_10m",
-            "pressure_msl",
-            "precipitation",
-            "cloudcover"
+            "temperature_2m", "relative_humidity_2m", "wind_speed_10m",
+            "pressure_msl", "precipitation", "cloudcover"
         ]
     }
 )[0]
@@ -225,11 +208,12 @@ weather_df = pd.DataFrame({
 })
 
 # ============================================
-# MERGE
+# STEP 6: Merge and prepare data
 # ============================================
 new_data = pd.merge(aq_df, weather_df, on="timestamp", how="inner")
 new_data.insert(0, "city", "Karachi")
 
+# Filter only new data
 new_data = new_data[new_data["timestamp"] > last_ts]
 
 if new_data.empty:
@@ -238,30 +222,41 @@ if new_data.empty:
 
 print(f"✅ New rows: {len(new_data)}")
 
-# ============================================
-# CONVERT FLOAT TO DOUBLE (float64)
-# ============================================
-numeric_cols = new_data.select_dtypes(include=['float32', 'float64']).columns
-
-for col in numeric_cols:
+# Convert float32 to float64
+for col in new_data.select_dtypes(include=['float32', 'float64']).columns:
     new_data[col] = new_data[col].astype('float64')
 
 # ============================================
-# INSERT INTO HOPSWORKS
+# STEP 7: Insert into Hopsworks (using offline materialization - NO KAFKA)
 # ============================================
 print("\n📤 Inserting into Hopsworks...")
 
 try:
-    fg.insert(new_data)
-    print("   ✅ Data inserted successfully!")
+    # Use offline materialization to bypass Kafka
+    fg.insert(new_data, write_options={"start_offline_materialization": True})
+    print("   ✅ Data inserted successfully (offline materialization)!")
 except Exception as e:
-    print(f"   ❌ Insert error: {e}")
-    sys.exit(1)
+    # Fallback: try without options
+    print(f"   ⚠️ First attempt failed: {e}")
+    print("   Trying alternative method...")
+    try:
+        fg.insert(new_data, offline=True)
+        print("   ✅ Data inserted successfully!")
+    except Exception as e2:
+        print(f"   ❌ Insert error: {e2}")
+        sys.exit(1)
 
 # ============================================
-# DONE
+# STEP 8: Verification
 # ============================================
+print("\n3. Verifying insertion...")
+try:
+    new_count = fg.count()
+    print(f"   📊 Total rows in feature group: {new_count}")
+except:
+    print("   ⚠️ Could not verify count, but insert likely succeeded")
+
 print("\n" + "=" * 60)
-print("✅ PIPELINE SUCCESS")
-print(f"   Inserted rows: {len(new_data)}")
+print("✅ HOURLY FETCH COMPLETE!")
+print(f"   Inserted: {len(new_data)} rows")
 print("=" * 60)

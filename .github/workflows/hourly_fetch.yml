@@ -21,8 +21,7 @@ jobs:
       - name: Install dependencies
         run: |
           pip install openmeteo-requests pandas requests_cache retry-requests python-dotenv
-          pip install hopsworks==4.7.*
-          pip install pyarrow
+          pip install "hopsworks[python]==4.7.*"
       
       - name: Run hourly fetch to Hopsworks
         env:

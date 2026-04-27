@@ -1,9 +1,12 @@
-# Minimal requirements to start
+# Core
 openmeteo-requests>=1.0.0
 pandas>=2.0.0
-requests-cache>=1.1.0
+requests-cache>=1.0.0
 retry-requests>=2.0.0
-openpyxl>=3.1.0
 python-dotenv>=1.0.0
-hopsworks==4.7.*
+
+# Hopsworks (with all extras to avoid missing dependencies)
+hopsworks[python]==4.7.*
+
+# Optional but recommended
 pyarrow>=15.0.0
