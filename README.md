@@ -28,6 +28,29 @@ It collects hourly air quality and weather data, creates ML features, trains mod
 - Checks the latest AQI.
 - Sends alerts via Telegram when AQI passes thresholds.
 
+### Telegram setup
+- Create a bot with BotFather and copy the bot token.
+- Send `/start` to the bot from your Telegram account before running alerts.
+- Create a `.env` file in the repository root and add your credentials there.
+- If using a group or channel, make sure the bot is added and has permission to send messages.
+
+### `.env` file example
+Create a file named `.env` at the repository root with:
+```text
+TELEGRAM_BOT_TOKEN="<your_bot_token>"
+TELEGRAM_CHAT_ID="<your_chat_id>"
+```
+
+### Running the Telegram alert script
+From the repository root:
+```bash
+python3 Src/telegram_alerts.py --test
+```
+If the test succeeds, run the alert check once:
+```bash
+python3 Src/telegram_alerts.py
+```
+
 ### `Src/feature_pipeline.py`
 - Fetches the full 2025 dataset from Open-Meteo.
 - Merges air quality and weather data.
