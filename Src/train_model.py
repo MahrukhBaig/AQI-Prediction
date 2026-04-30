@@ -210,7 +210,8 @@ try:
     mr = project.get_model_registry()
     
     version = int(datetime.now().strftime("%Y%m%d"))
-    model_registry_obj = mr.sklearn.create_model(
+    print(f"   Debug: ModelRegistry has sklearn={hasattr(mr, 'sklearn')} python={hasattr(mr, 'python')} tensorflow={hasattr(mr, 'tensorflow')}")
+    model_registry_obj = mr.python.create_model(
         name="aqi_predictor_random_forest",
         version=version,
         description="Random Forest model for AQI prediction in Karachi using engineered features",
@@ -224,6 +225,7 @@ try:
         },
         input_example=X_test[:1]
     )
+    print(f"   Debug: model_registry_obj type = {type(model_registry_obj)} has save={hasattr(model_registry_obj, 'save')}")
     model_registry_obj.save(str(model_path))
     print(f"   ✅ Model saved to Hopsworks Model Registry v{version}!")
 except Exception as e:

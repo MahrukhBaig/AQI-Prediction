@@ -20,22 +20,15 @@ def save_model_registry(project, model_name, model_path, metrics, input_example=
     try:
         mr = project.get_model_registry()
         version = int(datetime.now().strftime("%Y%m%d"))
-        if framework == "sklearn":
-            model_registry_obj = mr.sklearn.create_model(
-                name=model_name,
-                version=version,
-                description=f"XGBoost model for AQI prediction trained on updated Karachi data.",
-                metrics=metrics,
-                input_example=input_example,
-            )
-        else:
-            model_registry_obj = mr.python.create_model(
-                name=model_name,
-                version=version,
-                description=f"XGBoost model for AQI prediction trained on updated Karachi data.",
-                metrics=metrics,
-                input_example=input_example,
-            )
+        print(f"   Debug: ModelRegistry has sklearn={hasattr(mr, 'sklearn')} python={hasattr(mr, 'python')} tensorflow={hasattr(mr, 'tensorflow')}")
+        model_registry_obj = mr.python.create_model(
+            name=model_name,
+            version=version,
+            description=f"XGBoost model for AQI prediction trained on updated Karachi data.",
+            metrics=metrics,
+            input_example=input_example,
+        )
+        print(f"   Debug: model_registry_obj type = {type(model_registry_obj)} has save={hasattr(model_registry_obj, 'save')}")
         model_registry_obj.save(str(model_path))
         print(f"   ✅ Saved {model_name} to Hopsworks Model Registry v{version}")
     except Exception as e:
