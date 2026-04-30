@@ -1,0 +1,13 @@
+venv/
+.git/
+.github/
+__pycache__/
+*.pyc
+.cache/
+.env
+.cache.sqlite
+*.pkl
+!models/*.pkl
+notebooks/
+README.md
+.gitignore
