@@ -209,9 +209,8 @@ print("\n📤 10. Saving to Hopsworks Model Registry...")
 try:
     mr = project.get_model_registry()
     
-    # Create model in registry
     version = int(datetime.now().strftime("%Y%m%d"))
-    mr.create_model(
+    model_registry_obj = mr.sklearn.create_model(
         name="aqi_predictor_random_forest",
         version=version,
         description="Random Forest model for AQI prediction in Karachi using engineered features",
@@ -223,9 +222,10 @@ try:
             "test_mae": float(test_mae),
             "test_r2": float(test_r2)
         },
-        model_path=str(model_path)
+        input_example=X_test[:1]
     )
-    print(f"   ✅ Model saved to Hopsworks Model Registry!")
+    model_registry_obj.save(str(model_path))
+    print(f"   ✅ Model saved to Hopsworks Model Registry v{version}!")
 except Exception as e:
     print(f"   ⚠️ Could not save to registry: {e}")
 

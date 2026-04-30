@@ -16,17 +16,27 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 
-def save_model_registry(project, model_name, model_path, metrics):
+def save_model_registry(project, model_name, model_path, metrics, input_example=None, framework="sklearn"):
     try:
         mr = project.get_model_registry()
         version = int(datetime.now().strftime("%Y%m%d"))
-        mr.create_model(
-            name=model_name,
-            version=version,
-            description=f"XGBoost model for AQI prediction trained on updated Karachi data.",
-            metrics=metrics,
-            model_path=str(model_path)
-        )
+        if framework == "sklearn":
+            model_registry_obj = mr.sklearn.create_model(
+                name=model_name,
+                version=version,
+                description=f"XGBoost model for AQI prediction trained on updated Karachi data.",
+                metrics=metrics,
+                input_example=input_example,
+            )
+        else:
+            model_registry_obj = mr.python.create_model(
+                name=model_name,
+                version=version,
+                description=f"XGBoost model for AQI prediction trained on updated Karachi data.",
+                metrics=metrics,
+                input_example=input_example,
+            )
+        model_registry_obj.save(str(model_path))
         print(f"   ✅ Saved {model_name} to Hopsworks Model Registry v{version}")
     except Exception as e:
         print(f"   ⚠️ Could not save {model_name} to registry: {e}")
@@ -316,7 +326,9 @@ save_model_registry(
     project,
     model_name="aqi_predictor_xgboost",
     model_path=final_model_path,
-    metrics=final_metrics
+    metrics=final_metrics,
+    input_example=X_test[:1],
+    framework="sklearn"
 )
 
 print(f"\n📁 Model saved at: {final_model_path}")

@@ -5,19 +5,6 @@
 This repository builds an Air Quality Index (AQI) prediction system for Karachi.
 It collects hourly air quality and weather data, creates ML features, trains models, and shows results in a dashboard.
 
-## What changed recently
-
-- Removed unused files: `Src/debug_path.py`, `Src/inference.py`.
-- Added `Src/export_to_csv.py` to sync Hopsworks feature data back into `karachi_aqi_2025.csv`.
-- Updated `.github/workflows/hourly_fetch.yml` to:
-  - fetch new hourly data,
-  - upload it to Hopsworks,
-  - export Hopsworks data to CSV,
-  - send Telegram alerts.
-- Added `.github/workflows/daily_retrain.yml` to retrain models every day.
-- Updated `Src/train_model.py` to save Random Forest models into Hopsworks model registry.
-- Updated `Src/train_xgboost.py` to save XGBoost models into Hopsworks model registry and support automated CI runs.
-- Updated `Src/train_lstm.py` to save the LSTM model and register it in Hopsworks.
 
 ## Source files and their roles
 
@@ -117,25 +104,7 @@ It collects hourly air quality and weather data, creates ML features, trains mod
 - Retrains XGBoost, Random Forest, and LSTM models.
 - Saves models in Hopsworks model registry.
 
-## Do I need to commit these changes?
 
-Yes — these changes are currently only in your local repository.
-Git does not commit automatically. You must run:
-
-```bash
-git add .
-git commit -m "Add daily model retraining and Hopsworks model registry support"
-git push origin main
-```
-
-This will save your updates in the remote repository.
-
-## How to run locally
-
-1. Create a `.env` file with your Hopsworks API key:
-
-```bash
-HOPSWORKS_API_KEY=your_api_key_here
 ```
 
 2. Install dependencies:
@@ -148,18 +117,3 @@ pip install -r requirements.txt
 
 ```bash
 streamlit run Src/dashboard.py
-```
-
-4. Optionally run training manually:
-
-```bash
-python Src/train_xgboost.py
-python Src/train_model.py
-python Src/train_lstm.py
-```
-
-## Notes
-
-- The hourly workflow updates data, but the daily workflow retrains models.
-- The README explains what each file does and how the whole pipeline works.
-- Your changes are not yet committed unless you run `git commit` and `git push`.
