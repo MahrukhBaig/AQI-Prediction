@@ -12,6 +12,7 @@ import os
 import sys
 from pathlib import Path
 from dotenv import load_dotenv
+from datetime import datetime
 
 # ============================================
 # ENV SETUP (IDENTICAL TO WORKING HOURLY SCRIPT)
@@ -209,9 +210,10 @@ try:
     mr = project.get_model_registry()
     
     # Create model in registry
+    version = int(datetime.now().strftime("%Y%m%d"))
     mr.create_model(
         name="aqi_predictor_random_forest",
-        version=1,
+        version=version,
         description="Random Forest model for AQI prediction in Karachi using engineered features",
         metrics={
             "train_rmse": float(train_rmse),

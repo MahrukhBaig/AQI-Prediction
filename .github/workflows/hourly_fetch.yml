@@ -28,6 +28,11 @@ jobs:
           HOPSWORKS_API_KEY: ${{ secrets.HOPSWORKS_API_KEY }}
         run: python Src/hourly_fetch_hopsworks.py
 
+      - name: Export data to CSV
+        env:
+          HOPSWORKS_API_KEY: ${{ secrets.HOPSWORKS_API_KEY }}
+        run: python Src/export_to_csv.py
+
       - name: Send alerts if needed
         env:
          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}

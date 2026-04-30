@@ -10,6 +10,9 @@ import plotly.express as px
 import joblib
 from datetime import datetime, timedelta
 from pathlib import Path
+import hopsworks
+import os
+from dotenv import load_dotenv
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 
@@ -136,10 +139,37 @@ def load_models():
     return models
 
 def load_data():
+    # Try to load from Hopsworks first
+    try:
+        # Load API key from .env
+        env_path = ROOT_DIR / ".env"
+        if env_path.exists():
+            load_dotenv(dotenv_path=env_path, override=True)
+        
+        HOPSWORKS_API_KEY = os.getenv("HOPSWORKS_API_KEY")
+        if HOPSWORKS_API_KEY:
+            HOPSWORKS_API_KEY = HOPSWORKS_API_KEY.strip()
+        
+        if HOPSWORKS_API_KEY:
+            project = hopsworks.login(
+                api_key_value=HOPSWORKS_API_KEY,
+                host="eu-west.cloud.hopsworks.ai"
+            )
+            fs = project.get_feature_store()
+            fg = fs.get_feature_group("karachi_aqi_features", version=1)
+            df = fg.read()
+            df['timestamp'] = pd.to_datetime(df['timestamp'])
+            print(f"Loaded {len(df)} rows from Hopsworks")
+            return df
+    except Exception as e:
+        print(f"Could not load from Hopsworks: {e}")
+    
+    # Fallback to CSV
     csv_path = ROOT_DIR / "karachi_aqi_2025.csv"
     if csv_path.exists():
         df = pd.read_csv(csv_path)
         df['timestamp'] = pd.to_datetime(df['timestamp'])
+        print(f"Loaded {len(df)} rows from CSV")
         return df
     return None
 

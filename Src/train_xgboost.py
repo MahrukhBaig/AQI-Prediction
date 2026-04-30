@@ -11,8 +11,25 @@ import xgboost as xgb
 import joblib
 import os
 import sys
+from datetime import datetime
 from pathlib import Path
 from dotenv import load_dotenv
+
+
+def save_model_registry(project, model_name, model_path, metrics):
+    try:
+        mr = project.get_model_registry()
+        version = int(datetime.now().strftime("%Y%m%d"))
+        mr.create_model(
+            name=model_name,
+            version=version,
+            description=f"XGBoost model for AQI prediction trained on updated Karachi data.",
+            metrics=metrics,
+            model_path=str(model_path)
+        )
+        print(f"   ✅ Saved {model_name} to Hopsworks Model Registry v{version}")
+    except Exception as e:
+        print(f"   ⚠️ Could not save {model_name} to registry: {e}")
 
 # ============================================
 # ENV SETUP (SAME AS WORKING SCRIPT)
@@ -218,7 +235,14 @@ print(f"   ✅ XGBoost model saved to: {model_path}")
 # ============================================
 print("\n🔧 11. Hyperparameter Tuning (Optional)...")
 
-tune = input("\n   Do you want to tune hyperparameters? (y/n): ").lower()
+tune = os.getenv("TUNE_XGBOOST")
+if tune is None:
+    if sys.stdin.isatty():
+        tune = input("\n   Do you want to tune hyperparameters? (y/n): ").lower()
+    else:
+        tune = 'n'
+else:
+    tune = tune.lower()
 
 if tune == 'y':
     print("\n   ⚙️ Running GridSearchCV (this may take 5-10 minutes)...")
@@ -246,6 +270,8 @@ if tune == 'y':
     best_xgb = grid_search.best_estimator_
     best_pred = best_xgb.predict(X_test)
     best_rmse = np.sqrt(mean_squared_error(y_test, best_pred))
+    best_mae = mean_absolute_error(y_test, best_pred)
+    best_r2 = r2_score(y_test, best_pred)
     
     print(f"\n   📊 Tuned XGBoost Test RMSE: {best_rmse:.2f}")
     
@@ -257,6 +283,8 @@ if tune == 'y':
         print(f"   ✅ Tuned model saved to: {tuned_path}")
         xgb_model = best_xgb
         test_rmse = best_rmse
+        test_mae = best_mae
+        test_r2 = best_r2
 
 # ============================================
 # SUMMARY
@@ -269,4 +297,26 @@ print(f"   {'─' * 40}")
 print(f"   Test RMSE: {test_rmse:.2f} AQI points")
 print(f"   Test MAE:  {test_mae:.2f} AQI points")
 print(f"   Test R²:   {test_r2:.3f}")
-print(f"\n📁 Model saved at: {model_path}")
+final_model_path = model_path
+final_metrics = {
+    "test_rmse": float(test_rmse),
+    "test_mae": float(test_mae),
+    "test_r2": float(test_r2)
+}
+
+if tune == 'y' and 'tuned_path' in locals():
+    final_model_path = tuned_path
+    final_metrics = {
+        "test_rmse": float(best_rmse),
+        "test_mae": float(best_mae),
+        "test_r2": float(best_r2)
+    }
+
+save_model_registry(
+    project,
+    model_name="aqi_predictor_xgboost",
+    model_path=final_model_path,
+    metrics=final_metrics
+)
+
+print(f"\n📁 Model saved at: {final_model_path}")

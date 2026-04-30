@@ -17,6 +17,23 @@ import os
 import sys
 from pathlib import Path
 from dotenv import load_dotenv
+from datetime import datetime
+
+
+def save_model_registry(project, model_name, model_path, metrics):
+    try:
+        mr = project.get_model_registry()
+        version = int(datetime.now().strftime("%Y%m%d"))
+        mr.create_model(
+            name=model_name,
+            version=version,
+            description=f"LSTM model for AQI prediction trained on updated Karachi data.",
+            metrics=metrics,
+            model_path=str(model_path)
+        )
+        print(f"   ✅ Saved {model_name} to Hopsworks Model Registry v{version}")
+    except Exception as e:
+        print(f"   ⚠️ Could not save {model_name} to registry: {e}")
 
 # ============================================
 # ENV SETUP (SAME AS WORKING SCRIPT)
@@ -346,6 +363,21 @@ info = {
 
 joblib.dump(info, model_dir / "lstm_model_info.pkl")
 print(f"   ✅ Model info saved")
+
+# Save LSTM to Hopsworks model registry
+metrics = {
+    "test_rmse": float(test_rmse),
+    "test_mae": float(test_mae),
+    "test_r2": float(test_r2),
+    "lookback": lookback
+}
+
+save_model_registry(
+    project,
+    model_name="aqi_predictor_lstm",
+    model_path=model_path,
+    metrics=metrics
+)
 
 # ============================================
 # SUMMARY
