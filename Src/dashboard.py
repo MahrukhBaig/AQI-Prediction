@@ -145,6 +145,9 @@ def load_models():
 
 def load_data():
     # Try to load from Hopsworks first
+    source = "CSV"
+    df = None
+
     try:
         # Load API key from .env
         env_path = ROOT_DIR / ".env"
@@ -170,19 +173,23 @@ def load_data():
             fg = fs.get_feature_group("karachi_aqi_features", version=1)
             df = fg.read()
             df['timestamp'] = pd.to_datetime(df['timestamp'])
+            source = "Hopsworks"
             print(f"Loaded {len(df)} rows from Hopsworks")
-            return df
     except Exception as e:
         print(f"Could not load from Hopsworks: {e}")
     
-    # Fallback to CSV
-    csv_path = ROOT_DIR / "karachi_aqi_2025.csv"
-    if csv_path.exists():
-        df = pd.read_csv(csv_path)
-        df['timestamp'] = pd.to_datetime(df['timestamp'])
-        print(f"Loaded {len(df)} rows from CSV")
-        return df
-    return None
+    if df is None:
+        csv_path = ROOT_DIR / "karachi_aqi_2025.csv"
+        if csv_path.exists():
+            df = pd.read_csv(csv_path)
+            df['timestamp'] = pd.to_datetime(df['timestamp'])
+            source = "CSV"
+            print(f"Loaded {len(df)} rows from CSV")
+
+    if df is not None:
+        df = df.sort_values('timestamp').reset_index(drop=True)
+
+    return df, source
 
 def predict_future(df, model, hours=72):
     if df is None or model is None or len(df) < 100:
@@ -251,7 +258,7 @@ def main():
             st.rerun()
     
     with st.spinner("Loading..."):
-        df = load_data()
+        df, data_source = load_data()
         models = load_models()
         model = models.get('xgboost') if model_choice == "XGBoost (Recommended)" else models.get('random_forest')
     
@@ -267,6 +274,15 @@ def main():
     current_aqi = df['us_aqi'].iloc[-1]
     current_time = df['timestamp'].iloc[-1]
     status, color = get_aqi_status(current_aqi)
+
+    # Data freshness and source
+    now_ts = pd.Timestamp.now(tz=current_time.tz) if current_time.tzinfo else pd.Timestamp.now()
+    data_age = now_ts - current_time
+    st.markdown(f"**Data Source:** {data_source}")
+    if data_age > pd.Timedelta(hours=6):
+        st.warning(f"⚠️ Data appears stale: latest available timestamp is {current_time.strftime('%Y-%m-%d %H:%M %Z')}.")
+    else:
+        st.success(f"✅ Latest data timestamp: {current_time.strftime('%Y-%m-%d %H:%M %Z')}")
     
     col1, col2, col3 = st.columns(3)
     
@@ -329,6 +345,10 @@ def main():
         forecast = predict_future(df, model, hours=72)
     
     if forecast is not None and len(forecast) > 0:
+        st.write(
+            f"Forecast range: {forecast['timestamp'].min().strftime('%Y-%m-%d %H:%M')} "
+            f"to {forecast['timestamp'].max().strftime('%Y-%m-%d %H:%M')}"
+        )
         fig = go.Figure()
         fig.add_trace(go.Scatter(
             x=forecast['timestamp'],
@@ -356,7 +376,11 @@ def main():
             st.warning(f"⚠️ **CAUTION!** Unhealthy AQI ({max_val:.0f}) predicted!")
     
     st.markdown("---")
-    st.caption(f"Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | Features: {len(FEATURE_COLS)}")
+    st.caption(
+        f"App rendered: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | "
+        f"Latest data timestamp: {current_time.strftime('%Y-%m-%d %H:%M %Z')} | "
+        f"Features: {len(FEATURE_COLS)}"
+    )
 
 if __name__ == "__main__":
     main()
