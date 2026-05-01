@@ -10,7 +10,6 @@ import plotly.express as px
 import joblib
 from datetime import datetime, timedelta
 from pathlib import Path
-import hopsworks
 import os
 from dotenv import load_dotenv
 
@@ -151,6 +150,12 @@ def load_data():
             HOPSWORKS_API_KEY = HOPSWORKS_API_KEY.strip()
         
         if HOPSWORKS_API_KEY:
+            try:
+                import hopsworks
+            except ModuleNotFoundError:
+                print("Hopsworks package not installed; falling back to CSV.")
+                raise
+
             project = hopsworks.login(
                 api_key_value=HOPSWORKS_API_KEY,
                 host="eu-west.cloud.hopsworks.ai"

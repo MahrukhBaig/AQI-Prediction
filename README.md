@@ -130,11 +130,13 @@ python3 Src/telegram_alerts.py
 
 ```
 
-2. Install dependencies:
+2. Install dependencies for the dashboard only:
 
 ```bash
 pip install -r requirements.txt
 ```
+
+If you need Hopsworks support in the deployed app, install `requirements_full.txt` or add `hopsworks[python]==4.7.*` separately.
 
 3. Run the dashboard:
 

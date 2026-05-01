@@ -1,4 +1,5 @@
 # Dashboard only (for deployment)
+# If you want Hopsworks support in the deployed app, install hopsworks separately or use requirements_full.txt
 streamlit>=1.28.0
 pandas>=2.0.0
 plotly>=5.17.0
