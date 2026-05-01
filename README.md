@@ -136,7 +136,7 @@ python3 Src/telegram_alerts.py
 pip install -r requirements.txt
 ```
 
-If you need Hopsworks support in the deployed app, install `requirements_full.txt` or add `hopsworks[python]==4.7.*` separately.
+This version includes runtime model inference packages (`scikit-learn` and `xgboost`). If you need Hopsworks support in the deployed app, install `requirements_full.txt` or add `hopsworks[python]==4.7.*` separately.
 
 3. Run the dashboard:
 

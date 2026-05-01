@@ -129,11 +129,17 @@ def load_models():
     
     xgb_path = model_dir / "xgboost_aqi_model_tuned.pkl"
     if xgb_path.exists():
-        models['xgboost'] = joblib.load(xgb_path)
+        try:
+            models['xgboost'] = joblib.load(xgb_path)
+        except Exception as e:
+            print(f"Failed to load XGBoost model: {e}")
     
     rf_path = model_dir / "random_forest_aqi_model.pkl"
     if rf_path.exists():
-        models['random_forest'] = joblib.load(rf_path)
+        try:
+            models['random_forest'] = joblib.load(rf_path)
+        except Exception as e:
+            print(f"Failed to load Random Forest model: {e}")
     
     return models
 

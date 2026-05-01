@@ -1,8 +1,11 @@
 # Dashboard only (for deployment)
-# If you want Hopsworks support in the deployed app, install hopsworks separately or use requirements_full.txt
+# Includes runtime model inference dependencies for the Streamlit app.
+# If you also need Hopsworks, install it separately or use requirements_full.txt.
 streamlit>=1.28.0
 pandas>=2.0.0
 plotly>=5.17.0
 joblib>=1.3.0
 numpy>=1.24.0
 python-dotenv>=1.0.0
+scikit-learn>=1.3.0
+xgboost>=2.0.0
