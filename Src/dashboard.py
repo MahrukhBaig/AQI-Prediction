@@ -172,7 +172,7 @@ def load_data():
             fs = project.get_feature_store()
             fg = fs.get_feature_group("karachi_aqi_features", version=1)
             df = fg.read()
-            df['timestamp'] = pd.to_datetime(df['timestamp'])
+            df['timestamp'] = pd.to_datetime(df['timestamp'], utc=True)
             source = "Hopsworks"
             print(f"Loaded {len(df)} rows from Hopsworks")
     except Exception as e:
@@ -181,8 +181,8 @@ def load_data():
     if df is None:
         csv_path = ROOT_DIR / "karachi_aqi_2025.csv"
         if csv_path.exists():
-            df = pd.read_csv(csv_path)
-            df['timestamp'] = pd.to_datetime(df['timestamp'])
+            df = pd.read_csv(csv_path, parse_dates=['timestamp'])
+            df['timestamp'] = pd.to_datetime(df['timestamp'], utc=True)
             source = "CSV"
             print(f"Loaded {len(df)} rows from CSV")
 
@@ -195,8 +195,12 @@ def predict_future(df, model, hours=72):
     if df is None or model is None or len(df) < 100:
         return None
     
+    # Use only past/actual data for forecasting, not future predictions
+    now = pd.Timestamp.now(tz=df['timestamp'].dt.tz)
+    past_df = df[df['timestamp'] <= now].tail(200).copy()
+    
     predictions = []
-    temp_df = df.tail(200).copy()
+    temp_df = past_df.copy()
     
     for i in range(hours):
         temp_df = engineer_features(temp_df)
@@ -270,9 +274,16 @@ def main():
         st.error("❌ No model found! Please train models first.")
         return
     
-    # Current AQI
-    current_aqi = df['us_aqi'].iloc[-1]
-    current_time = df['timestamp'].iloc[-1]
+    # Current AQI - Find the latest actual observation (not future predictions)
+    now = pd.Timestamp.now(tz=df['timestamp'].dt.tz)
+    past_data = df[df['timestamp'] <= now]
+    if len(past_data) > 0:
+        current_aqi = past_data['us_aqi'].iloc[-1]
+        current_time = past_data['timestamp'].iloc[-1]
+    else:
+        # Fallback to last row if no past data (shouldn't happen)
+        current_aqi = df['us_aqi'].iloc[-1]
+        current_time = df['timestamp'].iloc[-1]
     status, color = get_aqi_status(current_aqi)
 
     # Data freshness and source
@@ -323,7 +334,10 @@ def main():
     # Historical Trends
     st.subheader("📈 Historical AQI Trends")
     days = st.selectbox("Time range (days)", [7, 14, 30, 60, 90], index=2)
-    df_filtered = df.tail(days * 24)
+    # Show only past data, not future predictions
+    now = pd.Timestamp.now(tz=df['timestamp'].dt.tz)
+    past_df = df[df['timestamp'] <= now]
+    df_filtered = past_df.tail(days * 24)
     
     fig = go.Figure()
     fig.add_trace(go.Scatter(

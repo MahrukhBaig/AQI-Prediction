@@ -30,6 +30,34 @@ if not HOPSWORKS_API_KEY:
     print("❌ API key missing")
     sys.exit(1)
 
+CSV_PATH = ROOT_DIR / "karachi_aqi_2025.csv"
+
+
+def save_new_data_to_csv(new_data, csv_path):
+    try:
+        new_data = new_data.copy()
+        new_data['timestamp'] = pd.to_datetime(new_data['timestamp'])
+        if new_data['timestamp'].dt.tz is None:
+            new_data['timestamp'] = new_data['timestamp'].dt.tz_localize('UTC')
+
+        if csv_path.exists():
+            existing = pd.read_csv(csv_path, parse_dates=['timestamp'])
+            existing['timestamp'] = pd.to_datetime(existing['timestamp'])
+            if existing['timestamp'].dt.tz is None:
+                existing['timestamp'] = existing['timestamp'].dt.tz_localize('UTC')
+
+            combined = pd.concat([existing, new_data], ignore_index=True)
+            combined = combined.drop_duplicates(subset=['timestamp']).sort_values('timestamp').reset_index(drop=True)
+            new_rows = len(combined) - len(existing)
+        else:
+            combined = new_data.sort_values('timestamp').reset_index(drop=True)
+            new_rows = len(combined)
+
+        combined.to_csv(csv_path, index=False)
+        print(f"   ✅ Updated CSV with {new_rows} new rows. Total rows: {len(combined)}")
+    except Exception as e:
+        print(f"   ⚠️ Could not update CSV: {e}")
+
 # Setup Open-Meteo client
 cache_session = requests_cache.CachedSession('.cache', expire_after=3600)
 retry_session = retry(cache_session, retries=5, backoff_factor=0.2)
@@ -119,6 +147,11 @@ now_utc = datetime.now(timezone.utc)
 print(f"   ⏰ Next hour: {next_hour}")
 print(f"   🕐 Current: {now_utc}")
 
+# Handle case where last timestamp is in the future (simulation environment)
+if last_ts > now_utc + timedelta(hours=1):
+    print(f"   ⚠️ Last timestamp ({last_ts}) is in the future. Using current time as base.")
+    next_hour = now_utc.replace(minute=0, second=0, microsecond=0)  # Round to current hour
+
 if next_hour > now_utc:
     print("\n✅ No new data needed — next hour is in the future.")
     sys.exit(0)
@@ -126,10 +159,20 @@ if next_hour > now_utc:
 # ============================================
 # STEP 5: Fetch new data
 # ============================================
-start_date = next_hour.strftime("%Y-%m-%d")
-end_date = now_utc.strftime("%Y-%m-%d")
+# For simulation: fetch real current data but shift timestamps to continue from last_ts
+real_now = datetime.now(timezone.utc)
+real_start = last_ts - timedelta(days=2*365) + timedelta(hours=1)  # Approximate: shift back 2 years
+real_end = real_now - timedelta(days=2*365)
 
-print(f"\n📅 Fetching {start_date} → {end_date}")
+# Ensure we don't go too far back
+if real_start.year < 2023:
+    real_start = datetime(2023, 1, 1, tzinfo=timezone.utc)
+
+start_date = real_start.strftime("%Y-%m-%d")
+end_date = real_end.strftime("%Y-%m-%d")
+
+print(f"\n📅 Fetching real data {start_date} → {end_date}")
+print(f"   Will shift timestamps to continue from {last_ts}")
 
 # Fetch Air Quality
 aq_response = openmeteo.weather_api(
@@ -159,6 +202,9 @@ aq_timestamps = pd.date_range(
     freq=pd.Timedelta(seconds=aq_hourly.Interval()),
     inclusive="left"
 )
+
+# Shift timestamps forward by 2 years for simulation
+aq_timestamps = aq_timestamps + pd.DateOffset(years=2)
 
 aq_df = pd.DataFrame({
     "timestamp": aq_timestamps,
@@ -196,6 +242,9 @@ weather_timestamps = pd.date_range(
     freq=pd.Timedelta(seconds=w_hourly.Interval()),
     inclusive="left"
 )
+
+# Shift timestamps forward by 2 years for simulation
+weather_timestamps = weather_timestamps + pd.DateOffset(years=2)
 
 weather_df = pd.DataFrame({
     "timestamp": weather_timestamps,
@@ -245,6 +294,9 @@ except Exception as e:
     except Exception as e2:
         print(f"   ❌ Insert error: {e2}")
         sys.exit(1)
+
+# Also persist the new data to the local CSV file.
+save_new_data_to_csv(new_data, CSV_PATH)
 
 # ============================================
 # STEP 8: Verification

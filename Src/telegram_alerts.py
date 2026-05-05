@@ -47,7 +47,49 @@ def send_telegram_message(message):
         return False
 
 def get_latest_aqi():
-    """Get latest AQI from CSV"""
+    """Get latest AQI from Hopsworks (primary) or CSV (fallback)"""
+    # Try Hopsworks first
+    try:
+        import hopsworks
+        from pathlib import Path
+        import os
+        
+        # Load API key
+        ROOT_DIR = Path(__file__).resolve().parent.parent
+        env_path = ROOT_DIR / ".env"
+        if env_path.exists():
+            from dotenv import load_dotenv
+            load_dotenv(dotenv_path=env_path, override=True)
+        
+        HOPSWORKS_API_KEY = os.getenv("HOPSWORKS_API_KEY")
+        if HOPSWORKS_API_KEY:
+            HOPSWORKS_API_KEY = HOPSWORKS_API_KEY.strip()
+        
+        if HOPSWORKS_API_KEY:
+            project = hopsworks.login(
+                api_key_value=HOPSWORKS_API_KEY,
+                host="eu-west.cloud.hopsworks.ai"
+            )
+            fs = project.get_feature_store()
+            fg = fs.get_feature_group("karachi_aqi_features", version=1)
+            df = fg.read()
+            df['timestamp'] = pd.to_datetime(df['timestamp'])
+            
+            # Sort by timestamp to ensure chronological order
+            df = df.sort_values('timestamp').reset_index(drop=True)
+            
+            # Only consider past observations, not future predictions
+            now = pd.Timestamp.now(tz=df['timestamp'].dt.tz) if df['timestamp'].dt.tz is not None else pd.Timestamp.now()
+            past_data = df[df['timestamp'] <= now]
+            
+            if len(past_data) > 0:
+                latest = past_data.iloc[-1]
+                return latest['us_aqi'], latest['timestamp']
+    except Exception as e:
+        print(f"Could not load from Hopsworks: {e}")
+    
+    # Fallback to CSV
+    print("Falling back to CSV data...")
     csv_path = Path(__file__).resolve().parent.parent / "karachi_aqi_2025.csv"
     
     if not csv_path.exists():
@@ -56,7 +98,14 @@ def get_latest_aqi():
     df = pd.read_csv(csv_path)
     df['timestamp'] = pd.to_datetime(df['timestamp'])
     
-    latest = df.iloc[-1]
+    # Only consider past observations, not future predictions
+    now = pd.Timestamp.now(tz=df['timestamp'].dt.tz) if df['timestamp'].dt.tz is not None else pd.Timestamp.now()
+    past_data = df[df['timestamp'] <= now]
+    
+    if len(past_data) == 0:
+        return None, None
+    
+    latest = past_data.iloc[-1]
     return latest['us_aqi'], latest['timestamp']
 
 def get_forecast_summary():
