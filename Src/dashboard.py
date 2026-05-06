@@ -1,6 +1,6 @@
 """
 STREAMLIT DASHBOARD - AQI PREDICTION
-Complete version with all 43 features
+Complete version with all 43 features and SHAP insights
 """
 import streamlit as st
 import pandas as pd
@@ -388,6 +388,46 @@ def main():
             st.error(f"🚨 **ALERT!** Hazardous AQI ({max_val:.0f}) predicted!")
         elif max_val > 100:
             st.warning(f"⚠️ **CAUTION!** Unhealthy AQI ({max_val:.0f}) predicted!")
+    
+    # ============================================
+    # SHAP ANALYSIS SECTION (Simplified - No Plots)
+    # ============================================
+    st.markdown("---")
+    st.subheader("🔍 Understanding Predictions (SHAP Analysis)")
+    st.markdown("SHAP (SHapley Additive exPlanations) identifies which features most influence AQI predictions.")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown("""
+        ### 📊 Feature Importance
+        
+        | Rank | Feature | Importance |
+        |------|---------|------------|
+        | 1  | `aqi_rolling_mean_3h` | **78.8%** |
+        | 2  | `aqi_lag_1h` | **19.1%** |
+        | 3  | `aqi_change` | 0.68% |
+        | 4  | `aqi_lag_3h` | 0.61% |
+        | 5  | `aqi_change_rate` | 0.60% |
+        """)
+    
+    with col2:
+        st.markdown("""
+        ### 💡 Key Insights
+        
+        - **The last 3 hours determine the next hour** (78.8% importance)
+        - **Pollution has momentum** - it doesn't change suddenly
+        - **Previous hour's AQI** alone predicts 19.1% of the variation
+        
+        ### 📈 Model Performance
+        
+        - **RMSE:** 0.87 AQI points
+        - **R² Score:** 0.998 (explains 99.8% of variation)
+        """)
+    
+    # ============================================
+    # END OF SHAP SECTION
+    # ============================================
     
     st.markdown("---")
     st.caption(
