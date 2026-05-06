@@ -1,7 +1,6 @@
 """
 HOURLY FETCH SCRIPT - Direct to Hopsworks
-Runs every hour via GitHub Actions
-Fetches only NEW data and inserts directly into Hopsworks Feature Store
+Fixes future date issue
 """
 import openmeteo_requests
 import pandas as pd
@@ -14,7 +13,7 @@ import sys
 from pathlib import Path
 from dotenv import load_dotenv
 
-# Load API key from .env
+# Load API key
 ROOT_DIR = Path(__file__).resolve().parent.parent
 env_path = ROOT_DIR / ".env"
 
@@ -29,34 +28,6 @@ if HOPSWORKS_API_KEY:
 if not HOPSWORKS_API_KEY:
     print("❌ API key missing")
     sys.exit(1)
-
-CSV_PATH = ROOT_DIR / "karachi_aqi_2025.csv"
-
-
-def save_new_data_to_csv(new_data, csv_path):
-    try:
-        new_data = new_data.copy()
-        new_data['timestamp'] = pd.to_datetime(new_data['timestamp'])
-        if new_data['timestamp'].dt.tz is None:
-            new_data['timestamp'] = new_data['timestamp'].dt.tz_localize('UTC')
-
-        if csv_path.exists():
-            existing = pd.read_csv(csv_path, parse_dates=['timestamp'])
-            existing['timestamp'] = pd.to_datetime(existing['timestamp'])
-            if existing['timestamp'].dt.tz is None:
-                existing['timestamp'] = existing['timestamp'].dt.tz_localize('UTC')
-
-            combined = pd.concat([existing, new_data], ignore_index=True)
-            combined = combined.drop_duplicates(subset=['timestamp']).sort_values('timestamp').reset_index(drop=True)
-            new_rows = len(combined) - len(existing)
-        else:
-            combined = new_data.sort_values('timestamp').reset_index(drop=True)
-            new_rows = len(combined)
-
-        combined.to_csv(csv_path, index=False)
-        print(f"   ✅ Updated CSV with {new_rows} new rows. Total rows: {len(combined)}")
-    except Exception as e:
-        print(f"   ⚠️ Could not update CSV: {e}")
 
 # Setup Open-Meteo client
 cache_session = requests_cache.CachedSession('.cache', expire_after=3600)
@@ -98,96 +69,65 @@ except Exception as e:
     sys.exit(1)
 
 # ============================================
-# STEP 3: Get last timestamp (with retry)
+# STEP 3: Get last timestamp (with future date fix)
 # ============================================
-import time
-
 print("\n2. Reading last timestamp from Hopsworks...")
 
-max_retries = 3
-last_ts = None
+df_existing = fg.read()
+df_existing['timestamp'] = pd.to_datetime(df_existing['timestamp'])
+last_ts = df_existing['timestamp'].max()
+now_utc = datetime.now(timezone.utc)
 
-for attempt in range(max_retries):
-    try:
-        if attempt > 0:
-            print(f"   Retry attempt {attempt + 1}/{max_retries}...")
-        
-        # Try to get only latest timestamp (faster)
-        try:
-            query = fg.select(["timestamp"]).sort("timestamp", ascending=False).limit(1)
-            latest_row = query.read()
-            last_ts = pd.to_datetime(latest_row['timestamp'].iloc[0])
-            print(f"   📅 Last timestamp: {last_ts}")
-            break
-        except Exception as e:
-            # Fallback: read all data
-            print(f"   Reading full dataset (this may take a moment)...")
-            df_existing = fg.read()
-            df_existing['timestamp'] = pd.to_datetime(df_existing['timestamp'])
-            last_ts = df_existing['timestamp'].max()
-            print(f"   📅 Last timestamp: {last_ts}")
-            break
-            
-    except Exception as e:
-        print(f"   ⚠️ Attempt {attempt + 1} failed: {e}")
-        if attempt < max_retries - 1:
-            wait_time = 5 * (attempt + 1)
-            print(f"   Waiting {wait_time} seconds...")
-            time.sleep(wait_time)
-        else:
-            print("   ❌ Max retries reached. Exiting.")
-            sys.exit(1)
+print(f"   📅 Last timestamp in Hopsworks: {last_ts}")
+print(f"   🕐 Current UTC time: {now_utc}")
+
+# FIX: If last timestamp is in the future, use current time as base
+if last_ts > now_utc:
+    print(f"   ⚠️ Last timestamp is in the future! Using current time as reference.")
+    last_ts = now_utc - timedelta(hours=1)
+    print(f"   📅 Adjusted last timestamp: {last_ts}")
+
+next_hour = last_ts + timedelta(hours=1)
+
+print(f"   ⏰ Next hour to fetch: {next_hour}")
+
+# Calculate end time as the last full hour
+end_time = now_utc.replace(minute=0, second=0, microsecond=0)
+print(f"   ⏰ End time (last full hour): {end_time}")
 
 # ============================================
 # STEP 4: Check if new data is needed
 # ============================================
-next_hour = last_ts + timedelta(hours=1)
-now_utc = datetime.now(timezone.utc)
-
-print(f"   ⏰ Next hour: {next_hour}")
-print(f"   🕐 Current: {now_utc}")
-
-# Handle case where last timestamp is in the future (simulation environment)
-if last_ts > now_utc + timedelta(hours=1):
-    print(f"   ⚠️ Last timestamp ({last_ts}) is in the future. Using current time as base.")
-    next_hour = now_utc.replace(minute=0, second=0, microsecond=0)  # Round to current hour
-
-if next_hour > now_utc:
+if next_hour > end_time:
     print("\n✅ No new data needed — next hour is in the future.")
     sys.exit(0)
 
 # ============================================
 # STEP 5: Fetch new data
 # ============================================
-# For simulation: fetch real current data but shift timestamps to continue from last_ts
-real_now = datetime.now(timezone.utc)
-real_start = last_ts - timedelta(days=2*365) + timedelta(hours=1)  # Approximate: shift back 2 years
-real_end = real_now - timedelta(days=2*365)
+start_date = next_hour.strftime("%Y-%m-%d")
+end_date = end_time.strftime("%Y-%m-%d")
 
-# Ensure we don't go too far back
-if real_start.year < 2023:
-    real_start = datetime(2023, 1, 1, tzinfo=timezone.utc)
-
-start_date = real_start.strftime("%Y-%m-%d")
-end_date = real_end.strftime("%Y-%m-%d")
-
-print(f"\n📅 Fetching real data {start_date} → {end_date}")
-print(f"   Will shift timestamps to continue from {last_ts}")
+print(f"\n📅 Fetching from {start_date} to {end_date}")
 
 # Fetch Air Quality
-aq_response = openmeteo.weather_api(
-    "https://air-quality-api.open-meteo.com/v1/air-quality",
-    params={
-        "latitude": KARACHI_LAT,
-        "longitude": KARACHI_LON,
-        "start_date": start_date,
-        "end_date": end_date,
-        "hourly": [
-            "pm10", "pm2_5", "carbon_monoxide", "nitrogen_dioxide",
-            "ozone", "sulphur_dioxide", "us_aqi", "european_aqi"
-        ]
-    }
-)[0]
+try:
+    aq_response = openmeteo.weather_api(
+        "https://air-quality-api.open-meteo.com/v1/air-quality",
+        params={
+            "latitude": KARACHI_LAT,
+            "longitude": KARACHI_LON,
+            "start_date": start_date,
+            "end_date": end_date,
+            "hourly": [
+                "pm10", "pm2_5", "carbon_monoxide", "nitrogen_dioxide",
+                "ozone", "sulphur_dioxide", "us_aqi", "european_aqi"
+            ]
+        }
+    )[0]
+except Exception as e:
+    print(f"   ❌ API error: {e}")
+    sys.exit(1)
 
 aq_hourly = aq_response.Hourly()
 aq_len = len(aq_hourly.Variables(0).ValuesAsNumpy())
@@ -202,9 +142,6 @@ aq_timestamps = pd.date_range(
     freq=pd.Timedelta(seconds=aq_hourly.Interval()),
     inclusive="left"
 )
-
-# Shift timestamps forward by 2 years for simulation
-aq_timestamps = aq_timestamps + pd.DateOffset(years=2)
 
 aq_df = pd.DataFrame({
     "timestamp": aq_timestamps,
@@ -243,9 +180,6 @@ weather_timestamps = pd.date_range(
     inclusive="left"
 )
 
-# Shift timestamps forward by 2 years for simulation
-weather_timestamps = weather_timestamps + pd.DateOffset(years=2)
-
 weather_df = pd.DataFrame({
     "timestamp": weather_timestamps,
     "temperature": w_hourly.Variables(0).ValuesAsNumpy(),
@@ -257,13 +191,12 @@ weather_df = pd.DataFrame({
 })
 
 # ============================================
-# STEP 6: Merge and prepare data
+# STEP 6: Process and insert
 # ============================================
 new_data = pd.merge(aq_df, weather_df, on="timestamp", how="inner")
 new_data.insert(0, "city", "Karachi")
-
-# Filter only new data
 new_data = new_data[new_data["timestamp"] > last_ts]
+new_data = new_data[new_data["timestamp"] <= end_time]
 
 if new_data.empty:
     print("⚠️ No new rows")
@@ -275,38 +208,14 @@ print(f"✅ New rows: {len(new_data)}")
 for col in new_data.select_dtypes(include=['float32', 'float64']).columns:
     new_data[col] = new_data[col].astype('float64')
 
-# ============================================
-# STEP 7: Insert into Hopsworks (using offline materialization - NO KAFKA)
-# ============================================
 print("\n📤 Inserting into Hopsworks...")
 
 try:
-    # Use offline materialization to bypass Kafka
     fg.insert(new_data, write_options={"start_offline_materialization": True})
-    print("   ✅ Data inserted successfully (offline materialization)!")
+    print("   ✅ Data inserted successfully!")
 except Exception as e:
-    # Fallback: try without options
-    print(f"   ⚠️ First attempt failed: {e}")
-    print("   Trying alternative method...")
-    try:
-        fg.insert(new_data, offline=True)
-        print("   ✅ Data inserted successfully!")
-    except Exception as e2:
-        print(f"   ❌ Insert error: {e2}")
-        sys.exit(1)
-
-# Also persist the new data to the local CSV file.
-save_new_data_to_csv(new_data, CSV_PATH)
-
-# ============================================
-# STEP 8: Verification
-# ============================================
-print("\n3. Verifying insertion...")
-try:
-    new_count = fg.count()
-    print(f"   📊 Total rows in feature group: {new_count}")
-except:
-    print("   ⚠️ Could not verify count, but insert likely succeeded")
+    print(f"   ❌ Insert error: {e}")
+    sys.exit(1)
 
 print("\n" + "=" * 60)
 print("✅ HOURLY FETCH COMPLETE!")
