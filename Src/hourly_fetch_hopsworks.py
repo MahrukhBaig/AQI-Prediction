@@ -91,14 +91,10 @@ next_hour = last_ts + timedelta(hours=1)
 
 print(f"   ⏰ Next hour to fetch: {next_hour}")
 
-# Calculate end time as the last full hour
-end_time = now_utc.replace(minute=0, second=0, microsecond=0)
-print(f"   ⏰ End time (last full hour): {end_time}")
-
 # ============================================
 # STEP 4: Check if new data is needed
 # ============================================
-if next_hour > end_time:
+if next_hour > now_utc:
     print("\n✅ No new data needed — next hour is in the future.")
     sys.exit(0)
 
@@ -106,7 +102,7 @@ if next_hour > end_time:
 # STEP 5: Fetch new data
 # ============================================
 start_date = next_hour.strftime("%Y-%m-%d")
-end_date = end_time.strftime("%Y-%m-%d")
+end_date = now_utc.strftime("%Y-%m-%d")
 
 print(f"\n📅 Fetching from {start_date} to {end_date}")
 
@@ -196,7 +192,6 @@ weather_df = pd.DataFrame({
 new_data = pd.merge(aq_df, weather_df, on="timestamp", how="inner")
 new_data.insert(0, "city", "Karachi")
 new_data = new_data[new_data["timestamp"] > last_ts]
-new_data = new_data[new_data["timestamp"] <= end_time]
 
 if new_data.empty:
     print("⚠️ No new rows")
