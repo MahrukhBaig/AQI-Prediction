@@ -266,6 +266,41 @@ except Exception as e:
     print(f"   ⚠️ Could not verify: {e}")
 
 # ============================================
+# STEP 13: CREATE FEATURE VIEW (NEW!)
+# ============================================
+print("\n🔍 12. Creating Feature View...")
+
+try:
+    # Get the engineered feature group again (or use existing reference)
+    engineered_fg = fs.get_feature_group("karachi_aqi_engineered_features", version=1)
+    
+    # Create Feature View (like a saved query)
+    feature_view = fs.create_feature_view(
+        name="karachi_aqi_final_view",
+        version=1,
+        description="Complete engineered features for AQI prediction - 43 features including time, lags, rolling stats, and weather interactions",
+        query=engineered_fg.select_all()
+    )
+    
+    print(f"   ✅ Feature View created: {feature_view.name}")
+    print(f"   🔗 Link: Feature View v{feature_view.version}")
+    
+    # Optional: Create Training Dataset (versioned snapshot)
+    print("\n📊 13. Creating Training Dataset...")
+    
+    training_dataset = feature_view.create_training_dataset(
+        description="Training dataset for XGBoost model - includes all 43 engineered features",
+        data_format="csv",
+        write_options={"wait_for_job": True}
+    )
+    
+    print(f"   ✅ Training Dataset created: version {training_dataset.version}")
+    
+except Exception as e:
+    print(f"   ⚠️ Could not create Feature View/Training Dataset: {e}")
+    print("   (This is optional - your feature group is still saved)")
+
+# ============================================
 # SUMMARY
 # ============================================
 print("\n" + "=" * 70)
@@ -277,9 +312,11 @@ print(f"   📊 Original rows: {before}")
 print(f"   📊 Final rows: {after}")
 print(f"   📋 Original columns: 15")
 print(f"   📋 Final columns: {len(df.columns)}")
-print(f"\n📁 New feature group:")
+print(f"\n📁 Feature Group:")
 print(f"   📛 Name: karachi_aqi_engineered_features")
+print(f"   🔢 Version: 1")
+print(f"\n📁 Feature View (NEW!):")
+print(f"   📛 Name: karachi_aqi_final_view")
 print(f"   🔢 Version: 1")
 print("\n🎯 Next step: Train ML model using these features!")
 print("   👉 Run: python Src/train_model.py")
-print("=" * 70)

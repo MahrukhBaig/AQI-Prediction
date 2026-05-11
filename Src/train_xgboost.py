@@ -16,7 +16,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 
-def save_model_registry(project, model_name, model_path, metrics, input_example=None, framework="sklearn"):
+def save_model_registry(project, model_name, model_path, metrics, input_example=None, framework="sklearn", training_dataset_version=None):
     try:
         mr = project.get_model_registry()
         version = int(datetime.now().strftime("%Y%m%d"))
@@ -27,6 +27,7 @@ def save_model_registry(project, model_name, model_path, metrics, input_example=
             description=f"XGBoost model for AQI prediction trained on updated Karachi data.",
             metrics=metrics,
             input_example=input_example,
+            training_dataset_version=training_dataset_version
         )
         print(f"   Debug: model_registry_obj type = {type(model_registry_obj)} has save={hasattr(model_registry_obj, 'save')}")
         model_registry_obj.save(str(model_path))
@@ -76,19 +77,53 @@ except Exception as e:
     sys.exit(1)
 
 # ============================================
-# STEP 2: Load Engineered Features
+# STEP 2: Get or Create Feature View
 # ============================================
-print("\n📂 2. Loading engineered features...")
+print("\n🔍 2. Getting Feature View...")
+
+training_dataset_version = None
 
 try:
-    fg = fs.get_feature_group("karachi_aqi_engineered_features", version=1)
-    df = fg.read()
-    print(f"   ✅ Loaded {len(df)} rows from engineered features")
+    # Try to get existing Feature View
+    feature_view = fs.get_feature_view("karachi_aqi_final_view", version=1)
+    print(f"   ✅ Found existing Feature View: {feature_view.name}")
+    
+    # Create a versioned Training Dataset for XGBoost
+    print("\n📊 2b. Creating Training Dataset for XGBoost...")
+    try:
+        training_dataset = feature_view.create_training_dataset(
+            description="Training data for XGBoost model",
+            data_format="csv",
+            write_options={"wait_for_job": True}
+        )
+        print(f"   ✅ Training Dataset created: version {training_dataset.version}")
+        training_dataset_version = training_dataset.version
+        
+        # Load data from Training Dataset
+        df = training_dataset.read()
+        print(f"   ✅ Loaded {len(df)} rows from Training Dataset")
+        
+    except Exception as e:
+        print(f"   ⚠️ Could not create Training Dataset, falling back to Feature View: {e}")
+        df = feature_view.get_batch_data()
+        print(f"   ✅ Loaded {len(df)} rows from Feature View")
+        
 except Exception as e:
-    print(f"   ⚠️ Engineered features not found, trying raw features...")
-    fg = fs.get_feature_group("karachi_aqi_features", version=1)
-    df = fg.read()
-    print(f"   ✅ Loaded {len(df)} rows from raw features")
+    print(f"   ⚠️ Feature View not found, loading from Feature Group directly: {e}")
+    print("\n📂 2b. Loading engineered features from Feature Group...")
+    try:
+        fg = fs.get_feature_group("karachi_aqi_engineered_features", version=1)
+        df = fg.read()
+        print(f"   ✅ Loaded {len(df)} rows from engineered features")
+    except Exception as e2:
+        print(f"   ⚠️ Engineered features not found: {e2}")
+        try:
+            fg = fs.get_feature_group("karachi_aqi_features", version=1)
+            df = fg.read()
+            print(f"   ✅ Loaded {len(df)} rows from raw features")
+        except Exception as e3:
+            print(f"   ❌ Failed to load data: {e3}")
+            sys.exit(1)
 
 df['timestamp'] = pd.to_datetime(df['timestamp'])
 print(f"   📅 Date range: {df['timestamp'].min()} to {df['timestamp'].max()}")
@@ -321,7 +356,13 @@ save_model_registry(
     model_path=final_model_path,
     metrics=final_metrics,
     input_example=X_test[:1],
-    framework="sklearn"
+    framework="sklearn",
+    training_dataset_version=training_dataset_version
 )
 
 print(f"\n📁 Model saved at: {final_model_path}")
+if 'feature_view' in locals():
+    print(f"\n📁 Hopsworks components:")
+    print(f"   👉 Feature View: karachi_aqi_final_view v1")
+if training_dataset_version:
+    print(f"   👉 Training Dataset: v{training_dataset_version}")

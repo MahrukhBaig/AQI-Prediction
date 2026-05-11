@@ -59,28 +59,53 @@ except Exception as e:
     sys.exit(1)
 
 # ============================================
-# STEP 2: Load Engineered Features
+# STEP 2: Get or Create Feature View
 # ============================================
-print("\n📂 2. Loading engineered features...")
+print("\n🔍 2. Getting Feature View...")
 
 try:
-    # First try to get engineered features
-    fg = fs.get_feature_group("karachi_aqi_engineered_features", version=1)
-    df = fg.read()
-    print(f"   ✅ Loaded {len(df)} rows from engineered features")
-    print(f"   📅 Date range: {df['timestamp'].min()} to {df['timestamp'].max()}")
-except Exception as e:
-    print(f"   ⚠️ Engineered features not found: {e}")
-    print("   Trying raw features instead...")
+    # Try to get existing Feature View
+    feature_view = fs.get_feature_view("karachi_aqi_final_view", version=1)
+    print(f"   ✅ Found existing Feature View: {feature_view.name}")
+    
+    # OPTIONAL: Create a versioned Training Dataset for this model
+    print("\n📊 2b. Creating Training Dataset for Random Forest...")
     try:
-        fg = fs.get_feature_group("karachi_aqi_features", version=1)
+        training_dataset = feature_view.create_training_dataset(
+            description="Training data for Random Forest model",
+            data_format="csv",
+            write_options={"wait_for_job": True}
+        )
+        print(f"   ✅ Training Dataset created: version {training_dataset.version}")
+        
+        # Load data from Training Dataset
+        df = training_dataset.read()
+        print(f"   ✅ Loaded {len(df)} rows from Training Dataset")
+        
+    except Exception as e:
+        print(f"   ⚠️ Could not create Training Dataset, falling back to Feature View: {e}")
+        df = feature_view.get_batch_data()
+        print(f"   ✅ Loaded {len(df)} rows from Feature View")
+        
+except Exception as e:
+    print(f"   ⚠️ Feature View not found, loading from Feature Group directly: {e}")
+    print("\n📂 2b. Loading engineered features from Feature Group...")
+    try:
+        fg = fs.get_feature_group("karachi_aqi_engineered_features", version=1)
         df = fg.read()
-        print(f"   ✅ Loaded {len(df)} rows from raw features")
+        print(f"   ✅ Loaded {len(df)} rows from engineered features")
     except Exception as e2:
-        print(f"   ❌ Failed to load data: {e2}")
-        sys.exit(1)
+        print(f"   ⚠️ Engineered features not found: {e2}")
+        try:
+            fg = fs.get_feature_group("karachi_aqi_features", version=1)
+            df = fg.read()
+            print(f"   ✅ Loaded {len(df)} rows from raw features")
+        except Exception as e3:
+            print(f"   ❌ Failed to load data: {e3}")
+            sys.exit(1)
 
 df['timestamp'] = pd.to_datetime(df['timestamp'])
+print(f"   📅 Date range: {df['timestamp'].min()} to {df['timestamp'].max()}")
 
 # ============================================
 # STEP 3: Prepare Features (X) and Target (y)
@@ -210,7 +235,14 @@ try:
     mr = project.get_model_registry()
     
     version = int(datetime.now().strftime("%Y%m%d"))
-    print(f"   Debug: ModelRegistry has sklearn={hasattr(mr, 'sklearn')} python={hasattr(mr, 'python')} tensorflow={hasattr(mr, 'tensorflow')}")
+    
+    # Try to associate with Training Dataset if it was created
+    try:
+        training_dataset_version = training_dataset.version if 'training_dataset' in locals() else None
+        print(f"   📊 Associated with Training Dataset v{training_dataset_version}")
+    except:
+        training_dataset_version = None
+    
     model_registry_obj = mr.python.create_model(
         name="aqi_predictor_random_forest",
         version=version,
@@ -223,9 +255,9 @@ try:
             "test_mae": float(test_mae),
             "test_r2": float(test_r2)
         },
-        input_example=X_test[:1]
+        input_example=X_test[:1],
+        training_dataset_version=training_dataset_version
     )
-    print(f"   Debug: model_registry_obj type = {type(model_registry_obj)} has save={hasattr(model_registry_obj, 'save')}")
     model_registry_obj.save(str(model_path))
     print(f"   ✅ Model saved to Hopsworks Model Registry v{version}!")
 except Exception as e:
@@ -245,3 +277,9 @@ print(f"   Test MAE:  {test_mae:.2f} AQI points")
 print(f"   Test R²:   {test_r2:.3f}")
 print(f"\n📁 Files created:")
 print(f"   👉 Model: models/random_forest_aqi_model.pkl")
+if 'feature_view' in locals():
+    print(f"\n📁 Hopsworks components:")
+    print(f"   👉 Feature View: karachi_aqi_final_view v1")
+if 'training_dataset' in locals():
+    print(f"   👉 Training Dataset: v{training_dataset.version}")
+print("=" * 70)
