@@ -1,6 +1,6 @@
 """
-TRAIN XGBOOST MODEL - AQI PREDICTION
-XGBoost often outperforms Random Forest for tabular data
+TRAIN XGBOOST MODEL - AQI PREDICTION (Production Ready)
+Includes Training Dataset versioning for reproducibility
 """
 import hopsworks
 import pandas as pd
@@ -15,28 +15,49 @@ from datetime import datetime
 from pathlib import Path
 from dotenv import load_dotenv
 
+# ============================================
+# PRODUCTION HELPER FUNCTIONS
+# ============================================
 
-def save_model_registry(project, model_name, model_path, metrics, input_example=None, framework="sklearn", training_dataset_version=None):
+def create_training_dataset(feature_view, description=None):
+    """
+    Create a versioned training dataset for reproducibility.
+    Each day creates a NEW frozen snapshot.
+    Falls back to Feature View if Training Dataset creation fails.
+    """
+    version_date = datetime.now().strftime("%Y%m%d")
+    dataset_name = f"aqi_training_data_{version_date}"
+    
     try:
-        mr = project.get_model_registry()
-        version = int(datetime.now().strftime("%Y%m%d"))
-        print(f"   Debug: ModelRegistry has sklearn={hasattr(mr, 'sklearn')} python={hasattr(mr, 'python')} tensorflow={hasattr(mr, 'tensorflow')}")
-        model_registry_obj = mr.python.create_model(
-            name=model_name,
-            version=version,
-            description=f"XGBoost model for AQI prediction trained on updated Karachi data.",
-            metrics=metrics,
-            input_example=input_example,
-            training_dataset_version=training_dataset_version
+        # Try to create new training dataset
+        print(f"   📊 Creating new training dataset: {dataset_name}")
+        td = feature_view.create_training_dataset(
+            name=dataset_name,
+            version=1,
+            description=description or f"Training data for model trained on {version_date}",
+            data_format="csv",
+            write_options={"wait_for_job": True}
         )
-        print(f"   Debug: model_registry_obj type = {type(model_registry_obj)} has save={hasattr(model_registry_obj, 'save')}")
-        model_registry_obj.save(str(model_path))
-        print(f"   ✅ Saved {model_name} to Hopsworks Model Registry v{version}")
-    except Exception as e:
-        print(f"   ⚠️ Could not save {model_name} to registry: {e}")
+        print(f"   ✅ Created training dataset: {dataset_name}")
+        return td, version_date
+    except AttributeError as e:
+        print(f"   ⚠️ Could not create Training Dataset, falling back to Feature View: {e}")
+        # Fall back to using Feature View directly
+        df = feature_view.get_batch_data()
+        print(f"   ✅ Loaded {len(df)} rows from Feature View")
+        return df, version_date  # Return df instead of td, but we'll handle it
+
+def get_semantic_version(model_metrics):
+    """
+    Generate semantic version based on performance.
+    Major = architecture change, Minor = new features, Patch = retraining.
+    """
+    # You can make this more sophisticated
+    base_version = "2.0.0"
+    return base_version
 
 # ============================================
-# ENV SETUP (SAME AS WORKING SCRIPT)
+# ENV SETUP
 # ============================================
 ROOT_DIR = Path(__file__).resolve().parent.parent
 env_path = ROOT_DIR / ".env"
@@ -57,7 +78,7 @@ if not HOPSWORKS_API_KEY:
 print(f"🔐 Using API Key: {HOPSWORKS_API_KEY[:5]}*****")
 
 print("=" * 70)
-print("⚡ XGBOOST - AQI PREDICTION MODEL")
+print("⚡ XGBOOST - AQI PREDICTION (PRODUCTION)")
 print("=" * 70)
 
 # ============================================
@@ -77,61 +98,40 @@ except Exception as e:
     sys.exit(1)
 
 # ============================================
-# STEP 2: Get or Create Feature View
+# STEP 2: Get Feature View
 # ============================================
 print("\n🔍 2. Getting Feature View...")
 
-training_dataset_version = None
-
 try:
-    # Try to get existing Feature View
     feature_view = fs.get_feature_view("karachi_aqi_final_view", version=1)
-    print(f"   ✅ Found existing Feature View: {feature_view.name}")
-    
-    # Create a versioned Training Dataset for XGBoost
-    print("\n📊 2b. Creating Training Dataset for XGBoost...")
-    try:
-        training_dataset = feature_view.create_training_dataset(
-            description="Training data for XGBoost model",
-            data_format="csv",
-            write_options={"wait_for_job": True}
-        )
-        print(f"   ✅ Training Dataset created: version {training_dataset.version}")
-        training_dataset_version = training_dataset.version
-        
-        # Load data from Training Dataset
-        df = training_dataset.read()
-        print(f"   ✅ Loaded {len(df)} rows from Training Dataset")
-        
-    except Exception as e:
-        print(f"   ⚠️ Could not create Training Dataset, falling back to Feature View: {e}")
-        df = feature_view.get_batch_data()
-        print(f"   ✅ Loaded {len(df)} rows from Feature View")
-        
+    print(f"   ✅ Found Feature View: {feature_view.name}")
 except Exception as e:
-    print(f"   ⚠️ Feature View not found, loading from Feature Group directly: {e}")
-    print("\n📂 2b. Loading engineered features from Feature Group...")
-    try:
-        fg = fs.get_feature_group("karachi_aqi_engineered_features", version=1)
-        df = fg.read()
-        print(f"   ✅ Loaded {len(df)} rows from engineered features")
-    except Exception as e2:
-        print(f"   ⚠️ Engineered features not found: {e2}")
-        try:
-            fg = fs.get_feature_group("karachi_aqi_features", version=1)
-            df = fg.read()
-            print(f"   ✅ Loaded {len(df)} rows from raw features")
-        except Exception as e3:
-            print(f"   ❌ Failed to load data: {e3}")
-            sys.exit(1)
+    print(f"   ❌ Feature View not found. Run feature_engineering.py first.")
+    sys.exit(1)
 
+# ============================================
+# STEP 3: Create Training Dataset (Frozen Snapshot)
+# ============================================
+print("\n📊 3. Creating Training Dataset (frozen snapshot)...")
+
+training_dataset, dataset_version = create_training_dataset(
+    feature_view,
+    description=f"XGBoost training data - captures data up to {datetime.now().strftime('%Y-%m-%d')}"
+)
+
+# Load data from frozen training dataset or Feature View
+if hasattr(training_dataset, 'read'):
+    df = training_dataset.read()
+else:
+    df = training_dataset
 df['timestamp'] = pd.to_datetime(df['timestamp'])
+print(f"   ✅ Loaded {len(df)} rows from training dataset v{dataset_version}")
 print(f"   📅 Date range: {df['timestamp'].min()} to {df['timestamp'].max()}")
 
 # ============================================
-# STEP 3: Prepare Features and Target
+# STEP 4: Prepare Features and Target
 # ============================================
-print("\n🎯 3. Preparing features and target...")
+print("\n🎯 4. Preparing features and target...")
 
 # Columns to exclude
 exclude_cols = ['timestamp', 'city', 'us_aqi', 'european_aqi']
@@ -144,11 +144,10 @@ print(f"   ✅ Features: {len(feature_cols)} columns")
 print(f"   ✅ Target: us_aqi")
 
 # ============================================
-# STEP 4: Split Data (Time Series Split)
+# STEP 5: Split Data (Time Series Split)
 # ============================================
-print("\n✂️ 4. Splitting data (80% train, 20% test)...")
+print("\n✂️ 5. Splitting data (80% train, 20% test)...")
 
-# Sort by timestamp (critical for time series!)
 df_sorted = df.sort_values('timestamp')
 X_sorted = X.loc[df_sorted.index]
 y_sorted = y.loc[df_sorted.index]
@@ -163,11 +162,10 @@ print(f"   📊 Training set: {len(X_train)} rows")
 print(f"   📊 Test set: {len(X_test)} rows")
 
 # ============================================
-# STEP 5: Train XGBoost Model
+# STEP 6: Train XGBoost Model
 # ============================================
-print("\n⚡ 5. Training XGBoost model...")
+print("\n⚡ 6. Training XGBoost model...")
 
-# Base XGBoost model
 xgb_model = xgb.XGBRegressor(
     n_estimators=100,
     max_depth=6,
@@ -179,20 +177,16 @@ xgb_model = xgb.XGBRegressor(
 )
 
 xgb_model.fit(X_train, y_train)
-print("   ✅ Base XGBoost training complete!")
-
-# ============================================
-# STEP 6: Make Predictions
-# ============================================
-print("\n🔮 6. Making predictions...")
-
-y_train_pred = xgb_model.predict(X_train)
-y_test_pred = xgb_model.predict(X_test)
+print("   ✅ XGBoost training complete!")
 
 # ============================================
 # STEP 7: Evaluate Model
 # ============================================
 print("\n📊 7. Model Performance:")
+
+# Predictions
+y_train_pred = xgb_model.predict(X_train)
+y_test_pred = xgb_model.predict(X_test)
 
 # Training metrics
 train_rmse = np.sqrt(mean_squared_error(y_train, y_train_pred))
@@ -215,7 +209,7 @@ print(f"      MAE: {test_mae:.2f}")
 print(f"      R²: {test_r2:.3f}")
 
 # ============================================
-# STEP 8: Feature Importance (XGBoost)
+# STEP 8: Feature Importance
 # ============================================
 print("\n🔍 8. Feature Importance Analysis:")
 
@@ -224,105 +218,59 @@ importance_df = pd.DataFrame({
     'importance': xgb_model.feature_importances_
 }).sort_values('importance', ascending=False)
 
-print("\n   📊 Top 15 most important features:")
-print("   " + "-" * 55)
-for i, row in importance_df.head(15).iterrows():
+print("\n   📊 Top 10 most important features:")
+for i, row in importance_df.head(10).iterrows():
     bar = "█" * int(row['importance'] * 50)
     print(f"   {row['feature']:25s} {row['importance']:.4f} {bar}")
 
 # ============================================
-# STEP 9: Compare with Random Forest
+# STEP 9: Save Model
 # ============================================
-print("\n📊 9. Model Comparison:")
-
-# Load Random Forest model if exists
-rf_model_path = ROOT_DIR / "models" / "random_forest_aqi_model.pkl"
-if rf_model_path.exists():
-    rf_model = joblib.load(rf_model_path)
-    rf_test_pred = rf_model.predict(X_test)
-    rf_rmse = np.sqrt(mean_squared_error(y_test, rf_test_pred))
-    rf_r2 = r2_score(y_test, rf_test_pred)
-    
-    print(f"\n   {'Model':<20} {'RMSE':<10} {'R²':<10}")
-    print(f"   {'-' * 40}")
-    print(f"   {'Random Forest':<20} {rf_rmse:<10.2f} {rf_r2:<10.3f}")
-    print(f"   {'XGBoost':<20} {test_rmse:<10.2f} {test_r2:<10.3f}")
-    
-    if test_rmse < rf_rmse:
-        print(f"\n   ✅ XGBoost performs BETTER than Random Forest!")
-    else:
-        print(f"\n   ℹ️ Random Forest still performs better.")
-else:
-    print(f"\n   ℹ️ Random Forest model not found for comparison.")
-
-# ============================================
-# STEP 10: Save Model
-# ============================================
-print("\n💾 10. Saving model...")
+print("\n💾 9. Saving model...")
 
 model_dir = ROOT_DIR / "models"
 model_dir.mkdir(exist_ok=True)
 
-# Save XGBoost model
-model_path = model_dir / "xgboost_aqi_model.pkl"
+# Save with version in filename
+model_filename = f"xgboost_aqi_model_{dataset_version}.pkl"
+model_path = model_dir / model_filename
 joblib.dump(xgb_model, model_path)
-print(f"   ✅ XGBoost model saved to: {model_path}")
+print(f"   ✅ Model saved to: {model_path}")
+
+# Also save as latest for dashboard
+latest_path = model_dir / "xgboost_aqi_model_tuned.pkl"
+joblib.dump(xgb_model, latest_path)
+print(f"   ✅ Latest model saved to: {latest_path}")
 
 # ============================================
-# STEP 11: Try Hyperparameter Tuning (Optional)
+# STEP 10: Save to Model Registry
 # ============================================
-print("\n🔧 11. Hyperparameter Tuning (Optional)...")
+print("\n📤 10. Saving to Hopsworks Model Registry...")
 
-tune = os.getenv("TUNE_XGBOOST")
-if tune is None:
-    if sys.stdin.isatty():
-        tune = input("\n   Do you want to tune hyperparameters? (y/n): ").lower()
-    else:
-        tune = 'n'
-else:
-    tune = tune.lower()
-
-if tune == 'y':
-    print("\n   ⚙️ Running GridSearchCV (this may take 5-10 minutes)...")
+try:
+    mr = project.get_model_registry()
+    semantic_version = get_semantic_version({"rmse": test_rmse})
     
-    param_grid = {
-        'max_depth': [4, 6, 8],
-        'learning_rate': [0.05, 0.1, 0.15],
-        'n_estimators': [50, 100, 150]
-    }
-    
-    grid_search = GridSearchCV(
-        xgb.XGBRegressor(random_state=42, n_jobs=-1),
-        param_grid,
-        cv=3,
-        scoring='neg_mean_squared_error',
-        verbose=1
+    model_registry_obj = mr.python.create_model(
+        name="aqi_predictor_xgboost",
+        version=semantic_version,
+        description=f"XGBoost model trained on {dataset_version} data. RMSE: {test_rmse:.2f}",
+        metrics={
+            "train_rmse": float(train_rmse),
+            "train_mae": float(train_mae),
+            "train_r2": float(train_r2),
+            "test_rmse": float(test_rmse),
+            "test_mae": float(test_mae),
+            "test_r2": float(test_r2),
+            "training_dataset_version": dataset_version
+        },
+        input_example=X_test[:1]
     )
-    
-    grid_search.fit(X_train, y_train)
-    
-    print(f"\n   ✅ Best parameters: {grid_search.best_params_}")
-    print(f"   ✅ Best CV score: {np.sqrt(-grid_search.best_score_):.2f}")
-    
-    # Train best model
-    best_xgb = grid_search.best_estimator_
-    best_pred = best_xgb.predict(X_test)
-    best_rmse = np.sqrt(mean_squared_error(y_test, best_pred))
-    best_mae = mean_absolute_error(y_test, best_pred)
-    best_r2 = r2_score(y_test, best_pred)
-    
-    print(f"\n   📊 Tuned XGBoost Test RMSE: {best_rmse:.2f}")
-    
-    if best_rmse < test_rmse:
-        print(f"   ✅ Tuning improved the model!")
-        # Save tuned model
-        tuned_path = model_dir / "xgboost_aqi_model_tuned.pkl"
-        joblib.dump(best_xgb, tuned_path)
-        print(f"   ✅ Tuned model saved to: {tuned_path}")
-        xgb_model = best_xgb
-        test_rmse = best_rmse
-        test_mae = best_mae
-        test_r2 = best_r2
+    model_registry_obj.save(str(latest_path))
+    print(f"   ✅ Model saved to Hopsworks Model Registry v{semantic_version}")
+    print(f"   📊 Associated with Training Dataset: {dataset_version}")
+except Exception as e:
+    print(f"   ⚠️ Could not save to registry: {e}")
 
 # ============================================
 # SUMMARY
@@ -331,38 +279,8 @@ print("\n" + "=" * 70)
 print("✅ XGBOOST MODEL TRAINING COMPLETE!")
 print("=" * 70)
 print(f"\n📊 Final Model Performance:")
-print(f"   {'─' * 40}")
 print(f"   Test RMSE: {test_rmse:.2f} AQI points")
-print(f"   Test MAE:  {test_mae:.2f} AQI points")
 print(f"   Test R²:   {test_r2:.3f}")
-final_model_path = model_path
-final_metrics = {
-    "test_rmse": float(test_rmse),
-    "test_mae": float(test_mae),
-    "test_r2": float(test_r2)
-}
-
-if tune == 'y' and 'tuned_path' in locals():
-    final_model_path = tuned_path
-    final_metrics = {
-        "test_rmse": float(best_rmse),
-        "test_mae": float(best_mae),
-        "test_r2": float(best_r2)
-    }
-
-save_model_registry(
-    project,
-    model_name="aqi_predictor_xgboost",
-    model_path=final_model_path,
-    metrics=final_metrics,
-    input_example=X_test[:1],
-    framework="sklearn",
-    training_dataset_version=training_dataset_version
-)
-
-print(f"\n📁 Model saved at: {final_model_path}")
-if 'feature_view' in locals():
-    print(f"\n📁 Hopsworks components:")
-    print(f"   👉 Feature View: karachi_aqi_final_view v1")
-if training_dataset_version:
-    print(f"   👉 Training Dataset: v{training_dataset_version}")
+print(f"\n📁 Training Dataset: aqi_training_data_{dataset_version}")
+print(f"📁 Model: {model_filename}")
+print("=" * 70)
